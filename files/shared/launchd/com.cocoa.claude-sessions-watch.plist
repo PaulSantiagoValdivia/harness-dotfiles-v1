@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Vigilante de sesiones pesadas y quietas.
+
+  StartInterval 1800 (30 min) y NO 20 como cmux-dev-cleanup: este agente no
+  repara nada, sólo mira. La condición que vigila (una sesión cargada que dejó
+  de avanzar) se mide en horas, así que mirarla más seguido no adelanta nada y
+  sólo gasta.
+
+  RunAtLoad false a propósito: al bootear no hay sesiones de Claude vivas, así
+  que una corrida ahí sólo puede producir ruido o un aviso sobre nada.
+
+  El propio script ya trae su anti-repetición (6h por sesión sin cambio de
+  estado), así que este intervalo no controla cuánto avisa: controla cuánto
+  tarda en enterarse.
+
+  __HOME__ lo sustituye bootstrap.sh: launchd no expande variables en las rutas.
+-->
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.cocoa.claude-sessions-watch</string>
+  <key>ProgramArguments</key><array><string>__HOME__/.local/bin/claude-sessions-watch</string></array>
+  <key>StartInterval</key><integer>1800</integer>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/claude-sessions-watch.stdout.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/claude-sessions-watch.stderr.log</string>
+</dict></plist>

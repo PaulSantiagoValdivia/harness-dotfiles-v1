@@ -1,0 +1,10 @@
+change: triangulation-context-recovery
+artifact_store: openspec
+mode: auto
+delivery_strategy: auto-chain
+chain_strategy: feature-branch-chain
+phase: verify
+completed: [explore, proposal, specs, design, tasks, apply]
+review_lane: normal-fresh-review
+live_certification: blocked-mapping-and-native-access
+closure: pending-verification

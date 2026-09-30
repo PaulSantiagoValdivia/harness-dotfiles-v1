@@ -1,0 +1,10 @@
+# Config de `triangulate` y de los hooks triangulate-*.sh — mapea nombres cortos
+# a la ruta ABSOLUTA del checkout principal de cada repo. Sin expansión de
+# variables: los scripts leen el archivo tal cual.
+#
+# bootstrap.sh copia este ejemplo a ~/.claude/triangulate.conf solo si no existe.
+# Editalo con tus rutas reales; los tres nombres (back, front, app) son los que
+# usa el launcher: `triangulate claude <slug>` abre una sesión por cada uno.
+back=/Users/<usuario>/Documents/cocoa/cocoa/cocoa-core-backend
+front=/Users/<usuario>/Documents/cocoa/cocoa/cocoa-core-next
+app=/Users/<usuario>/Documents/cocoa/cocoa/cocoa_v2

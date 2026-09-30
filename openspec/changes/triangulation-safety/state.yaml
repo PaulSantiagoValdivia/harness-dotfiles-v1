@@ -1,0 +1,12 @@
+change: triangulation-safety
+artifact_store: openspec
+mode: auto
+delivery_strategy: auto-chain
+chain_strategy: feature-branch-chain
+phase: verify
+completed: [explore, proposal, specs, design, tasks, apply]
+apply_state: all_done
+review_lane: native-review
+live_certification: blocked-external-cmux-session
+verification_result: fail
+closure: blocked-live-smoke-and-assertion-quality

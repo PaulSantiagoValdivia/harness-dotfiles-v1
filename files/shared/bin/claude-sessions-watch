@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# claude-sessions-watch — avisa por las sesiones que NINGUNA otra barrera puede ver.
+#
+# POR QUÉ EXISTE, con la premisa ya corregida.
+#
+# El enforcement de presupuesto vive en `context-budget.sh`, registrado en
+# `UserPromptSubmit`: corre cuando el usuario ESCRIBE. Una sesión abandonada no
+# escribe nunca más, así que es justo la única que ninguna barrera puede ver.
+# Ese es el agujero, y es el único motivo de este vigilante.
+#
+# La primera versión de esta idea se aprobó para avisar de "sesiones viejas"
+# medidas por antigüedad de PROCESO. Esa premisa se cayó: `/clear` no reinicia
+# el proceso, así que la antigüedad no dice nada sobre la conversación, y el
+# 2026-09-03 tres sesiones reportadas como colgadas estaban entregando trabajo.
+# Un vigilante sobre esa medición no habría avisado de un problema: habría
+# industrializado un falso positivo, cada 30 minutos, hasta volverse ignorable.
+# Un aviso que se ignora es peor que ninguno, porque ocupa el lugar del que sí
+# serviría.
+#
+# QUÉ AVISA, entonces: sesiones PESADAS Y QUIETAS. Las dos condiciones juntas.
+#   - Pesada sola no alcanza: si está trabajando, su propio hook ya le avisa.
+#   - Quieta sola no es nada: mientras no manda turnos NO PAGA NADA. El costo es
+#     tamaño_de_contexto x cantidad_de_requests.
+#   - Pesada + quieta sí: está cargada, no avanza, y en cuanto la retomes pagás
+#     ese contexto entero en cada turno.
+#
+# QUÉ NO HACE: no mata, no cierra, no compacta, no toca ninguna sesión. Avisa.
+# La medición tiene un límite conocido de atribución (ver `shared` abajo), y un
+# demonio que cerrara sesiones sobre una atribución ambigua sería el falso
+# positivo en su peor forma: destructivo y automático.
+#
+# NO REIMPLEMENTA LA MEDICIÓN: consume `claude-sessions --porcelain`. Dos
+# fuentes de verdad sobre las mismas sesiones es exactamente el problema que
+# esta familia de herramientas vino a cerrar.
+#
+# Uso:  claude-sessions-watch          # una pasada (lo que corre launchd)
+#       claude-sessions-watch --dry-run  # imprime sin notificar ni tocar estado
+
+set -uo pipefail
+
+INSPECTOR="${CLAUDE_SESSIONS_BIN:-$HOME/.local/bin/claude-sessions}"
+STATE="${CLAUDE_SESSIONS_WATCH_STATE:-$HOME/.claude/.claude-sessions-watch.state}"
+LOG="${CLAUDE_SESSIONS_WATCH_LOG:-$HOME/.claude/logs/claude-sessions-watch.log}"
+# Cada cuánto se puede repetir el aviso de una sesión que sigue igual. Sin esto
+# el vigilante se vuelve ruido cada 30 minutos y se aprende a ignorarlo.
+REPEAT_H="${CLAUDE_SESSIONS_WATCH_REPEAT_H:-6}"
+DRY=0
+[ "${1:-}" = "--dry-run" ] && DRY=1
+
+mkdir -p "$(dirname "$LOG")" "$(dirname "$STATE")"
+
+log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG"; }
+
+# Un vigilante que muere ruidosamente es un vigilante que se desinstala. Los
+# fallos van al log con su causa; el exit code es 0 salvo error de uso.
+if [ ! -x "$INSPECTOR" ]; then
+  log "ERROR: no existe o no es ejecutable $INSPECTOR — sin medición, no se avisa nada"
+  exit 0
+fi
+
+rows="$("$INSPECTOR" --porcelain)" || {
+  log "ERROR: $INSPECTOR --porcelain falló (rc=$?); no se avisa sobre una medición que no se pudo hacer"
+  exit 0
+}
+
+now="$(date +%s)"
+touch "$STATE"
+new_state="$(mktemp -t claude-sessions-watch)" || { log "ERROR: sin temporal"; exit 0; }
+
+alerts=""
+count=0
+
+# pid \t ctx \t inact_min \t estado \t olvidada \t compartido \t label
+while IFS="$(printf '\t')" read -r pid ctx inact state forgotten shared label; do
+  [ -n "${pid:-}" ] || continue
+
+  # Sólo interesa pesada Y quieta. El propio inspector ya resolvió esa condición
+  # con los mismos umbrales que el hook: acá no se recalcula, se lee.
+  [ "$forgotten" = "1" ] || continue
+
+  # ¿Ya se avisó por esta sesión, en este mismo estado, hace poco?
+  prev="$(grep "^$pid	" "$STATE" | head -1)"
+  prev_state="$(printf '%s' "$prev" | cut -f2)"
+  prev_ts="$(printf '%s' "$prev" | cut -f3)"
+  case "$prev_ts" in ''|*[!0-9]*) prev_ts=0 ;; esac
+
+  if [ "$prev_state" = "$state" ] && [ $(( (now - prev_ts) / 3600 )) -lt "$REPEAT_H" ]; then
+    printf '%s\t%s\t%s\n' "$pid" "$state" "$prev_ts" >>"$new_state"
+    continue
+  fi
+
+  count=$((count+1))
+  hrs=$(( inact / 60 )); mins=$(( inact % 60 ))
+  if [ "$hrs" -gt 0 ]; then quiet="${hrs}h${mins}m"; else quiet="${mins}m"; fi
+
+  # `shared` = otro proceso comparte el mismo cwd, así que ctx e inactividad son
+  # del DIRECTORIO y no de este PID. Se dice así, en vez de señalar un PID que
+  # la medición no puede señalar.
+  if [ "$shared" = "1" ]; then
+    alerts="${alerts}alguna sesión en ${label}: $((ctx/1000))k, sin turnos hace ${quiet}"$'\n'
+  else
+    alerts="${alerts}${label} (pid ${pid}): $((ctx/1000))k, sin turnos hace ${quiet}"$'\n'
+  fi
+  printf '%s\t%s\t%s\n' "$pid" "$state" "$now" >>"$new_state"
+done <<EOF
+$rows
+EOF
+
+if [ "$count" -eq 0 ]; then
+  [ "$DRY" = 1 ] && echo "sin sesiones pesadas y quietas"
+  # El estado se reescribe igual: así se olvidan los PIDs que ya no existen y
+  # una sesión que vuelve a la vida puede volver a avisar más adelante.
+  [ "$DRY" = 0 ] && mv "$new_state" "$STATE" || rm -f "$new_state"
+  exit 0
+fi
+
+body="$(printf '%s' "$alerts" | sed '/^$/d')"
+title="Claude: ${count} sesión(es) cargada(s) y sin avanzar"
+# El texto dice el criterio, no sólo el veredicto: quien lee tiene que poder
+# discrepar con la herramienta sin leerle el código.
+subtitle="pesada + quieta = pagás todo ese contexto al retomarla"
+
+if [ "$DRY" = 1 ]; then
+  echo "== $title =="
+  echo "$subtitle"
+  echo "$body"
+  rm -f "$new_state"
+  exit 0
+fi
+
+# `display notification` NO bloquea. `display dialog` sí, y colgaría al usuario
+# y a cualquier sesión que esperara este proceso: no se usa acá nunca.
+osascript -e "display notification \"$(printf '%s' "$body" | sed 's/"/\\"/g' | tr '\n' ';')\" with title \"$title\" subtitle \"$subtitle\"" \
+  || log "ERROR: osascript no pudo notificar (¿permisos de notificaciones?)"
+
+log "aviso por $count sesión(es): $(printf '%s' "$body" | tr '\n' ';')"
+mv "$new_state" "$STATE"
+exit 0

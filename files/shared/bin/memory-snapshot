@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# memory-snapshot — pone la memoria de archivos bajo un historial Git LOCAL.
+#
+# POR QUÉ EXISTE.
+#
+# `~/.claude/memory` cambia con el uso diario, pero sin historial cualquier
+# edición futura sería irreversible. Este script crea snapshots locales antes
+# de que el consolidador proponga cambios: nunca empuja, trae ni configura un
+# remote, y nunca modifica, mueve o borra los archivos de memoria. Git sólo
+# escribe su metadata dentro de `.git`.
+#
+# Una corrida sin cambios no crea ruido. Un lock activo se respeta y se deja
+# para el próximo intento. Una rama distinta de `main` se considera una señal
+# de que hay trabajo deliberado en curso y, por eso, no se commitea encima.
+#
+# Uso: memory-snapshot             # inicializa o commitea cambios
+#      memory-snapshot --dry-run   # informa sin escribir absolutamente nada
+
+set -uo pipefail
+
+DIR="${MEMORY_DIR:-$HOME/.claude/memory}"
+DRY=0
+
+if [ "${1:-}" = "--dry-run" ]; then
+  DRY=1
+elif [ "$#" -ne 0 ]; then
+  printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "AVISO: uso: memory-snapshot [--dry-run]; no se toca nada"
+  exit 0
+fi
+
+log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
+
+git_failed() {
+  local rc="$1"
+  shift
+  log "ERROR: git falló (rc=$rc): $*"
+  exit "$rc"
+}
+
+if [ ! -d "$DIR" ]; then
+  log "memoria ausente: $DIR; no hay nada que versionar"
+  exit 0
+fi
+
+if [ ! -d "$DIR/.git" ]; then
+  if [ "$DRY" -eq 1 ]; then
+    log "DRY-RUN: inicializaría un repositorio Git local en $DIR y crearía el snapshot inicial"
+    exit 0
+  fi
+
+  git -C "$DIR" init -b main >/dev/null 2>&1 || git_failed "$?" "init -b main"
+  git -C "$DIR" config --local user.name "memory-snapshot" >/dev/null 2>&1 \
+    || git_failed "$?" "configurar user.name local"
+  git -C "$DIR" config --local user.email "memory-snapshot@localhost" >/dev/null 2>&1 \
+    || git_failed "$?" "configurar user.email local"
+  git -C "$DIR" add -A >/dev/null 2>&1 || git_failed "$?" "preparar snapshot inicial"
+  git -C "$DIR" -c core.hooksPath=/dev/null -c commit.gpgSign=false \
+    commit --allow-empty -m "snapshot: initial" >/dev/null 2>&1 \
+    || git_failed "$?" "crear snapshot inicial"
+  log "snapshot inicial creado en $DIR (rama main, sólo Git local)"
+  exit 0
+fi
+
+if [ -e "$DIR/.git/index.lock" ]; then
+  log "AVISO: existe $DIR/.git/index.lock; no se toca nada y se reintentará en la próxima corrida"
+  exit 0
+fi
+
+branch="$(git -C "$DIR" symbolic-ref --quiet --short HEAD 2>/dev/null)"
+branch_rc=$?
+if [ "$branch_rc" -ne 0 ] || [ "$branch" != "main" ]; then
+  [ -n "$branch" ] || branch="HEAD separado o desconocido"
+  log "AVISO: la rama actual es '$branch', no 'main'; no se crea ningún snapshot"
+  exit 3
+fi
+
+remotes="$(git -C "$DIR" remote 2>/dev/null)"
+remote_rc=$?
+[ "$remote_rc" -eq 0 ] || git_failed "$remote_rc" "listar remotes"
+if [ -n "$remotes" ]; then
+  remote_list="$(printf '%s' "$remotes" | paste -sd ',' -)"
+  log "AVISO: hay remote(s) configurado(s): $remote_list; se continúa localmente, sin push ni fetch"
+fi
+
+status="$(git -C "$DIR" status --porcelain 2>/dev/null)"
+status_rc=$?
+[ "$status_rc" -eq 0 ] || git_failed "$status_rc" "leer el estado"
+
+if [ -z "$status" ]; then
+  log "sin cambios en $DIR; no se crea snapshot"
+  exit 0
+fi
+
+if [ "$DRY" -eq 1 ]; then
+  log "DRY-RUN: crearía un snapshot con estos cambios:"
+  while IFS= read -r change; do
+    log "DRY-RUN: $change"
+  done <<< "$status"
+  exit 0
+fi
+
+git -C "$DIR" add -A >/dev/null 2>&1 || git_failed "$?" "preparar cambios"
+snapshot_date="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+git -C "$DIR" -c core.hooksPath=/dev/null -c commit.gpgSign=false \
+  commit -m "snapshot: $snapshot_date" >/dev/null 2>&1 \
+  || git_failed "$?" "crear snapshot"
+log "snapshot creado: $snapshot_date"
+exit 0

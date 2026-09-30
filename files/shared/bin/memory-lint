@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+# memory-lint — valida la memoria antes de aceptar una propuesta automática.
+#
+# POR QUÉ EXISTE.
+#
+# La memoria se carga en cada sesión y una entrada rota puede ocultar contexto o
+# apuntar a datos que ya no existen. Este linter convierte esos riesgos en un
+# contrato determinista y local. Sólo lee archivos: no corrige, reordena ni
+# normaliza nada, para que validar una propuesta jamás pueda modificarla.
+
+"""Validador read-only para el directorio de memoria de Claude Code."""
+
+from __future__ import annotations
+
+import argparse
+import collections
+import json
+import os
+from pathlib import Path
+import re
+import sys
+from typing import Iterable, NamedTuple
+
+
+VALID_TYPES = {"user", "feedback", "project", "reference"}
+INDEX_NAMES = ("MEMORY.md", "ARCHIVE.md")
+INDEX_TARGET_RE = re.compile(r"]\(([^)\n]+\.md)\)")
+LINK_RE = re.compile(r"\[\[([^\[\]\n]+)\]\]")
+TOP_LEVEL_KEY_RE = re.compile(rb"^[A-Za-z_][A-Za-z0-9_-]*\s*:")
+
+
+class Finding(NamedTuple):
+    code: str
+    file: str
+    message: str
+    key: str | None = None
+
+    def as_dict(self) -> dict[str, str]:
+        return {"code": self.code, "file": self.file, "message": self.message}
+
+
+class Memory(NamedTuple):
+    path: Path
+    frontmatter: bytes | None
+    body: bytes | None
+    fields: dict[str, str]
+
+
+class Report(NamedTuple):
+    errors: list[Finding]
+    warnings: list[Finding]
+    memories: dict[str, Memory]
+    references: set[str]
+    markdown_files: set[str]
+
+
+def scalar(value: str) -> str:
+    """Parsea sólo el escalar mínimo que usa el frontmatter real."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1]
+    return value
+
+
+def split_frontmatter(data: bytes) -> tuple[bytes | None, bytes | None]:
+    lines = data.splitlines(keepends=True)
+    if not lines or lines[0].rstrip(b"\r\n") != b"---":
+        return None, None
+    for index in range(1, len(lines)):
+        if lines[index].rstrip(b"\r\n") == b"---":
+            return b"".join(lines[1:index]), b"".join(lines[index + 1 :])
+    return None, None
+
+
+def parse_fields(frontmatter: bytes) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    in_metadata = False
+    for raw_line in frontmatter.decode("utf-8", errors="replace").splitlines():
+        if raw_line and not raw_line[0].isspace():
+            match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$", raw_line)
+            in_metadata = bool(match and match.group(1) == "metadata")
+            if match and match.group(1) in {"name", "description"}:
+                fields[match.group(1)] = scalar(match.group(2))
+            continue
+        if in_metadata:
+            match = re.match(r"^\s+type\s*:\s*(.*)$", raw_line)
+            if match:
+                fields["metadata.type"] = scalar(match.group(1))
+    return fields
+
+
+def frontmatter_without_aliases(frontmatter: bytes) -> bytes:
+    """Quita únicamente el nodo YAML top-level aliases, sin parsear YAML."""
+    kept: list[bytes] = []
+    skipping = False
+    for line in frontmatter.splitlines(keepends=True):
+        bare = line.rstrip(b"\r\n")
+        is_top_level = bool(bare) and not bare[:1].isspace() and bool(TOP_LEVEL_KEY_RE.match(bare))
+        if is_top_level:
+            key = bare.split(b":", 1)[0].strip()
+            skipping = key == b"aliases"
+        if not skipping:
+            kept.append(line)
+    return b"".join(kept)
+
+
+def indexed_files(root: Path, errors: list[Finding]) -> tuple[set[str], list[str]]:
+    references: set[str] = set()
+    ordered: list[str] = []
+    seen: dict[str, str] = {}
+    for index_name in INDEX_NAMES:
+        index_path = root / index_name
+        if not index_path.is_file():
+            continue
+        text = index_path.read_text(encoding="utf-8", errors="replace")
+        for line_number, line in enumerate(text.splitlines(), 1):
+            matches = INDEX_TARGET_RE.findall(line)
+            if not matches:
+                continue
+            target = matches[-1]
+            if target in seen:
+                errors.append(Finding(
+                    "INDEX_DUPLICATE_FILE",
+                    index_name,
+                    f"{target} aparece más de una vez en los índices (primera vez en {seen[target]})",
+                    target,
+                ))
+            else:
+                seen[target] = f"{index_name}:{line_number}"
+            references.add(target)
+            ordered.append(target)
+            if not (root / target).is_file():
+                errors.append(Finding(
+                    "INDEX_TARGET_MISSING",
+                    index_name,
+                    f"línea {line_number}: el archivo referenciado {target} no existe",
+                    target,
+                ))
+    return references, ordered
+
+
+def lint(root: Path) -> Report:
+    errors: list[Finding] = []
+    warnings: list[Finding] = []
+    references, _ = indexed_files(root, errors)
+
+    memory_index = root / "MEMORY.md"
+    if memory_index.is_file():
+        data = memory_index.read_bytes()
+        line_count = len(data.splitlines())
+        byte_count = len(data)
+        if line_count > 200:
+            errors.append(Finding("MEMORY_LINE_LIMIT", "MEMORY.md", f"tiene {line_count} líneas; el máximo es 200"))
+        elif line_count > 160:
+            warnings.append(Finding("MEMORY_LINE_NEAR_LIMIT", "MEMORY.md", f"tiene {line_count} líneas; supera el 80% de 200"))
+        if byte_count > 25000:
+            errors.append(Finding("MEMORY_BYTE_LIMIT", "MEMORY.md", f"tiene {byte_count} bytes; el máximo es 25000"))
+        elif byte_count > 20000:
+            warnings.append(Finding("MEMORY_BYTE_NEAR_LIMIT", "MEMORY.md", f"tiene {byte_count} bytes; supera el 80% de 25000"))
+
+    memories: dict[str, Memory] = {}
+    names: dict[str, str] = {}
+    for path in sorted(root.glob("*.md"), key=lambda item: item.name):
+        if path.name in INDEX_NAMES:
+            continue
+        data = path.read_bytes()
+        frontmatter, body = split_frontmatter(data)
+        fields = parse_fields(frontmatter) if frontmatter is not None else {}
+        memories[path.name] = Memory(path, frontmatter, body, fields)
+        if frontmatter is None:
+            errors.append(Finding("FRONTMATTER_MISSING", path.name, "falta frontmatter YAML delimitado por ---"))
+        else:
+            for key, code, label in (
+                ("name", "FRONTMATTER_NAME_MISSING", "name"),
+                ("description", "FRONTMATTER_DESCRIPTION_MISSING", "description"),
+                ("metadata.type", "FRONTMATTER_TYPE_MISSING", "metadata.type"),
+            ):
+                if not fields.get(key):
+                    errors.append(Finding(code, path.name, f"falta la clave obligatoria {label}"))
+            memory_type = fields.get("metadata.type")
+            if memory_type and memory_type not in VALID_TYPES:
+                errors.append(Finding(
+                    "FRONTMATTER_TYPE_INVALID",
+                    path.name,
+                    f"metadata.type={memory_type!r} no pertenece a {sorted(VALID_TYPES)}",
+                ))
+        name = fields.get("name")
+        if name:
+            if name in names:
+                errors.append(Finding(
+                    "NAME_DUPLICATE",
+                    path.name,
+                    f"name {name!r} también aparece en {names[name]}",
+                ))
+            else:
+                names[name] = path.name
+        if path.name not in references:
+            warnings.append(Finding("UNREFERENCED_FILE", path.name, "el archivo no está referenciado en MEMORY.md ni ARCHIVE.md"))
+
+    known_names = set(names)
+    for filename, memory in memories.items():
+        if memory.body is None:
+            continue
+        body_text = memory.body.decode("utf-8", errors="replace")
+        for link in sorted(set(LINK_RE.findall(body_text))):
+            if link not in known_names:
+                warnings.append(Finding("DANGLING_LINK", filename, f"[[{link}]] no tiene una memoria destino"))
+
+    errors.sort()
+    warnings.sort()
+    markdown_files = {path.name for path in root.glob("*.md") if path.is_file()}
+    return Report(errors, warnings, memories, references, markdown_files)
+
+
+def regression_findings(base: Report, proposal: Report) -> list[Finding]:
+    findings: list[Finding] = []
+
+    def stable_key(error: Finding) -> tuple[str, str, str]:
+        return (error.code, error.file, error.key or error.message)
+
+    base_errors = collections.Counter(stable_key(error) for error in base.errors)
+    proposal_errors = collections.Counter(stable_key(error) for error in proposal.errors)
+    proposal_examples = {stable_key(error): error for error in proposal.errors}
+    for key, count in sorted((proposal_errors - base_errors).items()):
+        error = proposal_examples[key]
+        for _ in range(count):
+            findings.append(Finding("BASE_ERROR_ADDED", error.file, f"apareció el error {error.code}: {error.message}"))
+
+    for filename in sorted(base.markdown_files - proposal.markdown_files):
+        findings.append(Finding("BASE_FILE_REMOVED", filename, "el archivo .md de la base desapareció"))
+
+    base_files = set(base.memories)
+    proposal_files = set(proposal.memories)
+    for filename in sorted(base_files & proposal_files):
+        old = base.memories[filename]
+        new = proposal.memories[filename]
+        if old.body != new.body:
+            findings.append(Finding("BASE_BODY_CHANGED", filename, "cambió el cuerpo exacto de la memoria"))
+        if old.frontmatter is None or new.frontmatter is None:
+            if old.frontmatter != new.frontmatter:
+                findings.append(Finding("BASE_FRONTMATTER_CHANGED", filename, "cambió el frontmatter fuera de aliases"))
+        elif frontmatter_without_aliases(old.frontmatter) != frontmatter_without_aliases(new.frontmatter):
+            findings.append(Finding("BASE_FRONTMATTER_CHANGED", filename, "cambió el frontmatter fuera de aliases"))
+
+    for filename in sorted(base.references - proposal.references):
+        findings.append(Finding("BASE_REFERENCE_REMOVED", filename, "dejó de estar referenciado en MEMORY.md o ARCHIVE.md"))
+
+    for filename in sorted((base_files & base.references) - proposal.references):
+        if filename in proposal_files:
+            findings.append(Finding("BASE_BECAME_UNREFERENCED", filename, "un archivo referenciado en la base pasó a estar sin referenciar"))
+
+    return sorted(findings)
+
+
+def print_human(errors: Iterable[Finding], warnings: Iterable[Finding]) -> None:
+    errors = list(errors)
+    warnings = list(warnings)
+    for finding in errors:
+        print(f"ERROR [{finding.code}] {finding.file}: {finding.message}")
+    for finding in warnings:
+        print(f"AVISO [{finding.code}] {finding.file}: {finding.message}")
+    print(f"memory-lint: {len(errors)} error(es), {len(warnings)} aviso(s)")
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(prog="memory-lint")
+    result.add_argument("--baseline", metavar="BASE_DIR")
+    result.add_argument("--json", action="store_true", dest="as_json")
+    result.add_argument("directory", nargs="?", metavar="DIR")
+    return result
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    default_dir = os.environ.get("MEMORY_DIR") or os.path.expanduser("~/.claude/memory")
+    root = Path(args.directory or default_dir)
+    if not root.is_dir():
+        parser().error(f"DIR no existe o no es un directorio: {root}")
+    if args.baseline is not None and not Path(args.baseline).is_dir():
+        parser().error(f"BASE_DIR no existe o no es un directorio: {args.baseline}")
+
+    proposal = lint(root)
+    if args.baseline is not None:
+        errors = regression_findings(lint(Path(args.baseline)), proposal)
+    else:
+        errors = list(proposal.errors)
+
+    if args.as_json:
+        payload = {
+            "errors": [finding.as_dict() for finding in errors],
+            "warnings": [finding.as_dict() for finding in proposal.warnings],
+        }
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print_human(errors, proposal.warnings)
+    return 1 if errors else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

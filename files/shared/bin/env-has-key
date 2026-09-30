@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# env-has-key — dice si un archivo .env define ciertas claves, SIN mostrar valores.
+#
+# Uso: env-has-key <archivo.env> KEY [KEY...]
+# Salida, una línea por clave:  KEY=si | KEY=no | KEY=vacia
+# rc=0 si todas están definidas y no vacías; rc=1 si falta o está vacía alguna;
+# rc=2 si el archivo no existe o no se puede leer.
+#
+# Por qué existe: el harness prohíbe a Claude leer/editar `.env*` (deny en
+# settings.json), y está bien. Pero sin una forma de MEDIR presencia, dos
+# sesiones se pasaron una noche infiriendo por tamaño y fecha si un PIN estaba
+# cargado o no, y le preguntaron al usuario cuatro veces algo que él ya había
+# hecho (2026-09-17/18). Medir presencia por booleano no expone el secreto.
+set -uo pipefail
+
+file="${1:-}"
+[ -n "$file" ] && [ "$#" -ge 2 ] || { echo "uso: env-has-key <archivo.env> KEY [KEY...]" >&2; exit 2; }
+shift
+[ -r "$file" ] || { echo "no se puede leer: $file" >&2; exit 2; }
+
+rc=0
+for key in "$@"; do
+  # línea `KEY=valor` (con `export` opcional), sin imprimir jamás el valor.
+  state="$(awk -v k="$key" '
+    { line=$0; sub(/^[[:space:]]*export[[:space:]]+/, "", line) }
+    index(line, k "=") == 1 {
+      v=substr(line, length(k)+2); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^["'"'"']|["'"'"']$/, "", v)
+      print (length(v) ? "si" : "vacia"); found=1; exit
+    }
+    END { if (!found) print "no" }' "$file")"
+  echo "$key=$state"
+  [ "$state" = si ] || rc=1
+done
+exit "$rc"

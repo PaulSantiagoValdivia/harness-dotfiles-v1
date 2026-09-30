@@ -1,0 +1,1105 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cocoa DevTools</title>
+<style>
+:root{--bg:#0f0f11;--s1:#18181c;--s2:#222228;--bd:#2e2e38;--tx:#e8e8f0;--mu:#888898;
+  --ac:#7c6af7;--ac2:#5b8af5;--gr:#3ecf8e;--re:#f87171;--or:#fb923c;--ye:#fbbf24;
+  --cb:#13131a;--r:8px;--rs:5px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:var(--bg);color:var(--tx);display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+/* ── Header ── */
+.hdr{display:flex;align-items:center;height:44px;background:var(--s1);border-bottom:1px solid var(--bd);flex-shrink:0}
+.logo{padding:0 16px;font-size:15px;font-weight:700;border-right:1px solid var(--bd);height:100%;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.logo span{color:var(--ac)}
+.tabs{display:flex;height:100%}
+.tab{padding:0 16px;font-size:13px;color:var(--mu);border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;transition:color .15s}
+.tab:hover{color:var(--tx)}.tab.on{color:var(--tx);border-bottom-color:var(--ac);font-weight:600}
+.hdr-right{margin-left:auto;display:flex;align-items:center;gap:8px;padding:0 14px}
+.srv-dot{width:8px;height:8px;border-radius:50%;background:var(--mu);transition:background .3s;flex-shrink:0}
+.srv-dot.ok{background:var(--gr)}.srv-dot.err{background:var(--re)}
+.srv-lbl{font-size:11px;color:var(--mu)}
+
+/* ── Sub-bar worktree ── */
+.wt-bar{display:flex;align-items:center;gap:8px;padding:0 14px;height:34px;background:var(--s2);border-bottom:1px solid var(--bd);flex-shrink:0;font-size:12px}
+.wt-label{color:var(--mu);font-weight:600;white-space:nowrap}
+select.wt-sel{background:var(--s1);border:1px solid var(--bd);color:var(--tx);font-size:12px;padding:3px 8px;border-radius:var(--rs);cursor:pointer;font-family:"SF Mono",Menlo,monospace;outline:none;max-width:400px}
+select.wt-sel:focus{border-color:var(--ac)}
+.wt-refresh{background:none;border:1px solid var(--bd);color:var(--mu);font-size:11px;padding:3px 8px;border-radius:var(--rs);cursor:pointer;font-family:inherit}
+.wt-refresh:hover{border-color:var(--ac);color:var(--ac)}
+.wt-badge{font-size:11px;padding:2px 8px;border-radius:12px;border:1px solid var(--bd);font-family:"SF Mono",Menlo,monospace;background:var(--s1)}
+.wt-badge.branch{color:var(--ac2)}.wt-badge.ver{color:var(--mu)}
+
+/* ── Panels ── */
+.panel{display:none;flex:1;overflow:hidden}.panel.on{display:flex;flex:1;overflow:hidden}
+
+/* ══ API CLIENT ══ */
+.api-wrap{display:flex;flex:1;overflow:hidden}
+.sidebar{width:240px;flex-shrink:0;background:var(--s1);border-right:1px solid var(--bd);display:flex;flex-direction:column;overflow:hidden}
+.sb-hdr{padding:8px 12px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;font-size:10px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:1px}
+.sb-clr{background:none;border:none;color:var(--mu);font-size:10px;padding:2px 5px;border-radius:3px;cursor:pointer;font-family:inherit}
+.sb-clr:hover{color:var(--re)}
+.hist{flex:1;overflow-y:auto}
+.hi{padding:7px 12px;cursor:pointer;border-bottom:1px solid var(--bd);transition:background .1s}
+.hi:hover{background:var(--s2)}
+.hi .m{font-size:10px;font-weight:700;margin-bottom:1px}
+.m.GET{color:var(--gr)}.m.POST{color:var(--ac)}.m.PUT{color:var(--ye)}.m.PATCH{color:var(--or)}.m.DELETE{color:var(--re)}
+.hi .p{font-size:11.5px;color:var(--tx);font-family:"SF Mono",Menlo,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hi .e{font-size:10px;color:var(--mu);margin-top:1px}
+.hist-empty{padding:18px 12px;text-align:center;color:var(--mu);font-size:13px}
+.api-main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.api-cfg{padding:7px 12px;background:var(--s2);border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.cfg-lbl{font-size:11px;color:var(--mu);font-weight:600;white-space:nowrap}
+select.env-sel,input.tok{background:var(--s1);border:1px solid var(--bd);color:var(--tx);font-size:12px;padding:4px 8px;border-radius:var(--rs);outline:none;font-family:inherit}
+select.env-sel:focus,input.tok:focus{border-color:var(--ac)}
+input.tok{flex:1;min-width:160px;font-family:"SF Mono",Menlo,monospace}
+input.tok::placeholder{color:var(--mu)}
+.tok-eye{background:none;border:1px solid var(--bd);color:var(--mu);font-size:11px;padding:3px 7px;border-radius:var(--rs);cursor:pointer;font-family:inherit}
+.tok-eye:hover{border-color:var(--ac);color:var(--ac)}
+.req-bar{padding:9px 12px;display:flex;gap:7px;border-bottom:1px solid var(--bd)}
+select.meth{background:var(--s2);border:1px solid var(--bd);color:var(--tx);font-size:13px;font-weight:700;padding:6px 8px;border-radius:var(--rs);cursor:pointer;font-family:inherit;outline:none;min-width:80px}
+select.meth:focus{border-color:var(--ac)}
+input.path-in{flex:1;background:var(--s1);border:1px solid var(--bd);color:var(--tx);font-size:12.5px;padding:6px 10px;border-radius:var(--rs);outline:none;font-family:"SF Mono",Menlo,monospace}
+input.path-in:focus{border-color:var(--ac)}
+input.path-in::placeholder{color:var(--mu)}
+.send-btn{background:var(--ac);color:#fff;border:none;border-radius:var(--rs);padding:6px 16px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;transition:opacity .15s}
+.send-btn:hover{opacity:.85}.send-btn:disabled{opacity:.4;cursor:not-allowed}
+.rr{flex:1;display:flex;overflow:hidden}
+.rp,.resP{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.rp{border-right:1px solid var(--bd)}
+.ptabs{display:flex;background:var(--s1);border-bottom:1px solid var(--bd)}
+.ptab{padding:7px 14px;font-size:12px;color:var(--mu);border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;transition:color .15s}
+.ptab:hover{color:var(--tx)}.ptab.on{color:var(--tx);border-bottom-color:var(--ac)}
+.pbody{flex:1;overflow:auto}
+textarea.body-ed{width:100%;height:100%;min-height:140px;background:var(--cb);color:var(--tx);border:none;outline:none;font-family:"SF Mono",Menlo,monospace;font-size:12.5px;line-height:1.6;padding:12px;resize:none}
+textarea.body-ed::placeholder{color:var(--mu)}
+.hdrs-ed{padding:10px 12px}
+.hrow{display:flex;gap:6px;margin-bottom:5px;align-items:center}
+input.hk,input.hv{background:var(--s1);border:1px solid var(--bd);color:var(--tx);font-size:12px;padding:4px 7px;border-radius:var(--rs);font-family:"SF Mono",Menlo,monospace;outline:none;flex:1}
+input.hk:focus,input.hv:focus{border-color:var(--ac)}
+.hdel{background:none;border:none;color:var(--mu);cursor:pointer;font-size:13px;padding:3px}
+.hdel:hover{color:var(--re)}
+.add-hdr{background:none;border:1px dashed var(--bd);color:var(--mu);font-size:12px;padding:5px 10px;border-radius:var(--rs);cursor:pointer;font-family:inherit;margin-top:3px;transition:all .15s}
+.add-hdr:hover{border-color:var(--ac);color:var(--ac)}
+.res-bar{display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--s1);border-bottom:1px solid var(--bd);font-size:12px;min-height:34px}
+.sbadge{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:10px;font-family:"SF Mono",Menlo,monospace}
+.s2xx{background:rgba(62,207,142,.15);color:var(--gr)}.s3xx{background:rgba(91,138,245,.15);color:var(--ac2)}
+.s4xx{background:rgba(251,191,36,.15);color:var(--ye)}.s5xx{background:rgba(248,113,113,.15);color:var(--re)}
+.res-time,.res-sz{color:var(--mu);font-size:11px}
+.res-cp{margin-left:auto;background:none;border:1px solid var(--bd);color:var(--mu);font-size:11px;padding:2px 7px;border-radius:4px;cursor:pointer;font-family:inherit}
+.res-cp:hover{border-color:var(--ac);color:var(--ac)}
+.res-ph{padding:28px 16px;text-align:center;color:var(--mu);font-size:13px}
+.json-view{padding:12px;font-family:"SF Mono",Menlo,monospace;font-size:12.5px;line-height:1.7;white-space:pre-wrap;word-break:break-all}
+.jk{color:var(--ac2)}.js{color:var(--gr)}.jn{color:var(--or)}.jb{color:var(--ye)}.jnu{color:var(--mu)}
+
+/* ══ WORKTREES ══ */
+.wt-panel{flex:1;overflow-y:auto;padding:24px 32px}
+.wt-panel h1{font-size:20px;font-weight:700;margin-bottom:4px}
+.wt-panel .sub{color:var(--mu);font-size:13px;margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid var(--bd)}
+.wt-grid{display:flex;flex-direction:column;gap:10px}
+.wt-card{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:14px 16px}
+.wt-card.active{border-color:var(--ac)}
+.wt-card-top{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.wt-card-branch{font-size:14px;font-weight:700;color:var(--tx)}
+.wt-card-active{font-size:10px;font-weight:700;background:rgba(124,106,247,.2);color:var(--ac);padding:2px 7px;border-radius:10px;text-transform:uppercase;letter-spacing:.8px}
+.wt-card-path{font-size:11px;color:var(--mu);font-family:"SF Mono",Menlo,monospace;margin-bottom:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wt-card-meta{display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+.wt-stat{display:flex;align-items:center;gap:4px;font-size:12px}
+.wt-stat .dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.dot-ok{background:var(--gr)}.dot-warn{background:var(--ye)}.dot-err{background:var(--re)}.dot-mu{background:var(--mu)}
+.wt-stat .txt{color:var(--mu)}
+.wt-stat .txt.warn{color:var(--ye)}.wt-stat .txt.err{color:var(--re)}.wt-stat .txt.ok{color:var(--gr)}
+.wt-last-commit{font-size:11px;color:var(--mu);font-style:italic;margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wt-card-btns{display:flex;gap:6px;flex-wrap:wrap}
+.wt-btn{background:none;border:1px solid var(--bd);color:var(--mu);font-size:11px;padding:3px 9px;border-radius:var(--rs);cursor:pointer;font-family:inherit;transition:all .15s}
+.wt-btn:hover{border-color:var(--ac);color:var(--ac)}
+.wt-btn.primary{border-color:var(--ac);color:var(--ac)}
+.wt-btn.primary:hover{background:rgba(124,106,247,.1)}
+.wt-btn.danger{border-color:rgba(248,113,113,.4);color:var(--re)}
+.wt-btn.danger:hover{border-color:var(--re);background:rgba(248,113,113,.08)}
+.wt-loading{padding:32px;text-align:center;color:var(--mu);font-size:13px}
+.audit-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.audit-summary{font-size:12px;color:var(--mu);flex:1}
+.audit-push{background:var(--ac);color:#fff;border:none;border-radius:var(--rs);padding:7px 13px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit}
+.audit-push:hover{opacity:.85}.audit-push:disabled{opacity:.4;cursor:not-allowed}
+.tri-card{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden}
+.tri-card.archived{border-color:rgba(62,207,142,.35)}
+.tri-archive{font-size:11px;color:var(--gr);max-width:560px;line-height:1.4}
+.tri-head{display:flex;align-items:center;gap:10px;padding:11px 14px;background:var(--s2);border-bottom:1px solid var(--bd);flex-wrap:wrap}
+.tri-slug{font-size:14px;font-weight:700;flex:1}.tri-count{font-size:11px;color:var(--mu)}
+.tri-qa{background:var(--s1);border:1px solid var(--bd);color:var(--tx);font-size:11px;padding:4px 7px;border-radius:var(--rs);font-family:inherit}
+.tri-note{min-width:220px;flex:1;background:var(--s1);border:1px solid var(--bd);color:var(--tx);font-size:11px;padding:4px 7px;border-radius:var(--rs);font-family:inherit;outline:none}
+.tri-note:focus,.tri-qa:focus{border-color:var(--ac)}
+.tri-body{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:10px}
+.tri-body .wt-card{min-width:0}.role-badge{font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--ac2)}
+.base-badge{font-size:10px;color:var(--mu);font-family:"SF Mono",Menlo,monospace}
+@media(max-width:1000px){.tri-body{grid-template-columns:1fr}.tri-note{width:100%;min-width:0}}
+
+/* ══ DEPLOY ══ */
+.doc-wrap{display:flex;flex:1;overflow:hidden}
+.doc-nav{width:190px;flex-shrink:0;background:var(--s1);border-right:1px solid var(--bd);overflow-y:auto;padding:8px 0}
+.doc-nav .nl{font-size:10px;font-weight:700;letter-spacing:1.2px;color:var(--mu);text-transform:uppercase;padding:10px 12px 4px}
+.doc-nav a{display:block;padding:6px 12px;color:var(--mu);text-decoration:none;font-size:12.5px;transition:color .15s,background .15s}
+.doc-nav a:hover{color:var(--tx);background:var(--s2)}
+.doc-main{flex:1;overflow-y:auto;padding:22px 32px}
+.doc-main h1{font-size:20px;font-weight:700;margin-bottom:4px}
+.doc-main .sub{color:var(--mu);font-size:13px;margin-bottom:22px;padding-bottom:12px;border-bottom:1px solid var(--bd)}
+.doc-main h2{font-size:15px;font-weight:700;margin:28px 0 12px}
+.doc-main h3{font-size:10.5px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:1px;margin:16px 0 8px}
+.doc-main p{color:var(--mu);font-size:13px;margin-bottom:10px;line-height:1.65}
+.doc-main p strong{color:var(--tx)}
+.doc-main hr{border:none;border-top:1px solid var(--bd);margin:24px 0}
+table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:14px}
+th{text-align:left;padding:6px 10px;font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--mu);border-bottom:1px solid var(--bd)}
+td{padding:6px 10px;border-bottom:1px solid var(--bd);font-family:"SF Mono",Menlo,monospace;font-size:11.5px;color:var(--tx);vertical-align:top}
+tr:last-child td{border-bottom:none}
+td.pl{font-family:inherit;font-size:12px}
+
+/* Checklist de deploy */
+.checklist{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;margin-bottom:16px}
+.cl-hdr{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--bd);background:var(--s2)}
+.cl-title{font-size:13px;font-weight:700;flex:1}
+.cl-reset{background:none;border:1px solid var(--bd);color:var(--mu);font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;font-family:inherit}
+.cl-reset:hover{border-color:var(--ye);color:var(--ye)}
+.cl-progress{font-size:11px;color:var(--mu);font-family:"SF Mono",Menlo,monospace}
+.cl-items{padding:0}
+.cl-item{display:flex;align-items:flex-start;gap:10px;padding:10px 14px;border-bottom:1px solid var(--bd);transition:background .15s}
+.cl-item:last-child{border-bottom:none}
+.cl-item:hover{background:rgba(255,255,255,.02)}
+.cl-item.done{opacity:.55}
+.cl-cb{width:18px;height:18px;border-radius:4px;border:2px solid var(--bd);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;margin-top:1px;transition:all .15s;background:none}
+.cl-cb:hover{border-color:var(--ac)}
+.cl-cb.checked{background:var(--ac);border-color:var(--ac)}
+.cl-cb.checked::after{content:'✓';font-size:11px;color:#fff;font-weight:700}
+.cl-body{flex:1;min-width:0}
+.cl-label{font-size:13px;color:var(--tx);margin-bottom:2px;line-height:1.4}
+.cl-item.done .cl-label{text-decoration:line-through;color:var(--mu)}
+.cl-note{font-size:11.5px;color:var(--mu);line-height:1.5;margin-bottom:4px}
+.cl-note code{background:var(--s2);border:1px solid var(--bd);padding:1px 5px;border-radius:3px;font-family:"SF Mono",Menlo,monospace;font-size:11px;color:var(--gr)}
+.cl-note a{color:var(--ac2);text-decoration:none}
+.cl-note a:hover{text-decoration:underline}
+.cl-actions{display:flex;gap:5px;margin-top:5px;flex-wrap:wrap}
+.cl-run{background:none;border:1px solid rgba(251,146,60,.4);color:var(--or);font-size:10.5px;padding:2px 8px;border-radius:4px;cursor:pointer;font-family:inherit;transition:all .15s}
+.cl-run:hover{border-color:var(--or);background:rgba(251,146,60,.08)}
+.cl-cpy{background:none;border:1px solid var(--bd);color:var(--mu);font-size:10.5px;padding:2px 8px;border-radius:4px;cursor:pointer;font-family:inherit;transition:all .15s}
+.cl-cpy:hover{border-color:var(--ac);color:var(--ac)}
+.cl-cpy.ok{border-color:var(--gr);color:var(--gr)}
+/* Separador de sección dentro del checklist */
+.cl-section{padding:6px 14px;background:var(--cb);border-bottom:1px solid var(--bd);font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--mu)}
+/* Alertas */
+.cal{border-radius:var(--rs);padding:10px 12px;font-size:12.5px;margin:10px 0 14px;border-left:3px solid;line-height:1.6;color:var(--tx)}
+.cal.warn{background:#1f1900;border-color:var(--ye)}.cal.info{background:#0e1a2e;border-color:var(--ac2)}
+/* Flavor grid */
+.fg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+.fc{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:11px}
+.fc .fn{font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px}
+.fc.dev .fn{color:var(--ac)}.fc.staging .fn{color:var(--ye)}.fc.prod .fn{color:var(--gr)}
+.fc .kv{margin-bottom:3px}
+.fc .k{font-size:10px;color:var(--mu)}.fc .v{font-size:11px;font-family:"SF Mono",Menlo,monospace;color:var(--tx);word-break:break-all}
+/* Code blocks */
+.cb{background:var(--cb);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;margin-bottom:9px}
+.cbh{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--bd);background:var(--s1)}
+.cbl{font-size:10px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.6px}
+.cbh-btns{display:flex;gap:5px}
+.cpy{background:none;border:1px solid var(--bd);color:var(--mu);font-size:10px;padding:2px 7px;border-radius:4px;cursor:pointer;font-family:inherit;transition:all .15s}
+.cpy:hover{border-color:var(--ac);color:var(--ac)}.cpy.ok{border-color:var(--gr);color:var(--gr)}
+.run-btn{background:none;border:1px solid rgba(251,146,60,.4);color:var(--or);font-size:10px;padding:2px 7px;border-radius:4px;cursor:pointer;font-family:inherit;transition:all .15s}
+.run-btn:hover{border-color:var(--or);background:rgba(251,146,60,.08)}
+.cb pre{padding:11px;font-family:"SF Mono",Menlo,monospace;font-size:12px;line-height:1.65;overflow-x:auto;color:var(--tx);white-space:pre}
+table td.pl{font-family:inherit;font-size:12px}
+
+/* ══ NOTES ══ */
+.notes-wrap{flex:1;overflow-y:auto;padding:22px 32px;max-width:760px}
+.ns{margin-bottom:28px}
+.nt{font-size:14px;font-weight:700;margin-bottom:3px}.nsu{font-size:12px;color:var(--mu);margin-bottom:8px}
+textarea.na{width:100%;background:var(--cb);border:1px solid var(--bd);border-radius:var(--r);color:var(--tx);font-size:13.5px;line-height:1.7;padding:12px;outline:none;resize:vertical;font-family:inherit;min-height:100px;transition:border-color .15s}
+textarea.na:focus{border-color:var(--ac)}
+textarea.na::placeholder{color:var(--mu)}
+.ns-sv{font-size:11px;color:var(--gr);margin-top:4px;display:none}
+
+/* ══ TERMINAL ══ */
+.term{position:fixed;bottom:0;left:0;right:0;height:0;background:var(--cb);border-top:1px solid var(--bd);display:flex;flex-direction:column;transition:height .2s ease;z-index:100;overflow:hidden}
+.term.open{height:290px}
+.term-tb{display:flex;align-items:center;padding:6px 12px;background:var(--s1);border-bottom:1px solid var(--bd);gap:8px;flex-shrink:0}
+.term-label{font-size:12px;font-weight:700;color:var(--tx);flex:1}
+.term-dot{width:7px;height:7px;border-radius:50%;background:var(--mu);flex-shrink:0}
+.term-dot.running{background:var(--ye);animation:blink 1s infinite}
+.term-dot.ok{background:var(--gr)}.term-dot.err{background:var(--re)}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+.term-st{font-size:11px;color:var(--mu)}
+.term-btn{background:none;border:1px solid var(--bd);color:var(--mu);font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer;font-family:inherit}
+.term-btn:hover{border-color:var(--re);color:var(--re)}
+#term-out{flex:1;overflow-y:auto;padding:10px 12px;font-family:"SF Mono",Menlo,monospace;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;color:var(--tx)}
+::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bd);border-radius:3px}
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <div class="logo">🥥 <span>Cocoa</span> DevTools</div>
+  <div class="tabs">
+    <button class="tab on"  onclick="showTab('api',this)">API Client</button>
+    <button class="tab"     onclick="showTab('wt',this)">Auditoría QA</button>
+    <button class="tab"     onclick="showTab('deploy',this)">Deploy</button>
+    <button class="tab"     onclick="showTab('notes',this)">Notas</button>
+  </div>
+  <div class="hdr-right">
+    <div class="srv-dot" id="srv-dot"></div>
+    <span class="srv-lbl" id="srv-lbl">sin servidor</span>
+  </div>
+</div>
+
+<div class="wt-bar" id="wt-bar">
+  <div id="wt-selector" style="display:flex;align-items:center;gap:8px;width:100%">
+    <span class="wt-label">Backend · Panel · App</span>
+    <select class="wt-sel" id="wt-sel" onchange="selectWorktree(this.value)"><option value="">Cargando...</option></select>
+    <button class="wt-refresh" onclick="refreshWorktrees()" title="Actualizar los tres repositorios">↻</button>
+    <span class="wt-badge branch" id="wt-branch" style="display:none"></span>
+    <span class="wt-badge ver"    id="wt-version" style="display:none"></span>
+  </div>
+</div>
+
+<!-- API CLIENT -->
+<div id="panel-api" class="panel on">
+<div class="api-wrap">
+  <div class="sidebar">
+    <div class="sb-hdr">Historial <button class="sb-clr" onclick="clearHist()">Limpiar</button></div>
+    <div class="hist" id="hist-list"><div class="hist-empty">Sin solicitudes todavía.</div></div>
+  </div>
+  <div class="api-main">
+    <div class="api-cfg">
+      <span class="cfg-lbl">Ambiente</span>
+      <select class="env-sel" id="env-sel" onchange="saveCfg()">
+        <option value="dev">DEV</option><option value="staging" selected>STAGING</option><option value="prod">PROD</option>
+      </select>
+      <span class="cfg-lbl">x-token</span>
+      <input class="tok" id="tok" type="password" placeholder="Pegar token..." oninput="saveCfg()">
+      <button class="tok-eye" onclick="toggleTok()">👁</button>
+    </div>
+    <div class="req-bar">
+      <select class="meth" id="meth"><option>GET</option><option selected>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
+      <input class="path-in" id="path-in" placeholder="mobile/recurso/accion" list="path-dl">
+      <datalist id="path-dl"></datalist>
+      <button class="send-btn" id="send-btn" onclick="sendReq()">Enviar ⌘↵</button>
+    </div>
+    <div class="rr">
+      <div class="rp">
+        <div class="ptabs">
+          <button class="ptab on" onclick="showPTab('body',this,'req')">Body JSON</button>
+          <button class="ptab"    onclick="showPTab('hdrs',this,'req')">Headers</button>
+        </div>
+        <div class="pbody">
+          <div id="req-body"><textarea class="body-ed" id="body-ed" placeholder='{\n  "param": "valor"\n}'></textarea></div>
+          <div id="req-hdrs" style="display:none"><div class="hdrs-ed"><div id="xhdrs"></div><button class="add-hdr" onclick="addHdr()">+ Header</button></div></div>
+        </div>
+      </div>
+      <div class="resP">
+        <div class="ptabs">
+          <button class="ptab on" onclick="showPTab('pretty',this,'res')">Pretty</button>
+          <button class="ptab"    onclick="showPTab('raw',this,'res')">Raw</button>
+        </div>
+        <div class="res-bar" id="res-bar"><span style="color:var(--mu);font-size:12px">Esperando request...</span></div>
+        <div class="pbody" id="res-body"><div class="res-ph">Ejecuta una solicitud para ver la respuesta.</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- WORKTREES -->
+<div id="panel-wt" class="panel">
+<div class="wt-panel">
+  <h1>Auditoría QA de triangulaciones</h1>
+  <div class="sub">Vista consolidada de backend, panel y app. Verifica una triangulación por vez, deja sus tres worktrees limpios y actualizados, y solo entonces intégrala a dev.</div>
+  <div class="audit-toolbar">
+    <div class="audit-summary" id="audit-summary">Cargando inventario...</div>
+    <button class="wt-btn" id="toggle-archived" onclick="toggleArchived()">Mostrar cerradas</button>
+    <button class="audit-push" id="push-verified" onclick="promoteVerified()">Integrar verificado a dev</button>
+  </div>
+  <div id="wt-cards" class="wt-grid"><div class="wt-loading">Cargando triangulaciones...</div></div>
+</div>
+</div>
+
+<!-- DEPLOY -->
+<div id="panel-deploy" class="panel">
+<div class="doc-wrap">
+  <nav class="doc-nav">
+    <div class="nl">Pre-vuelo</div>
+    <a href="#preflight">Checklist general</a>
+    <div class="nl">Ambientes</div>
+    <a href="#env-dev">🟣 DEV</a>
+    <a href="#env-staging">🟡 STAGING</a>
+    <a href="#env-prod">🟢 PROD</a>
+    <div class="nl">Referencia</div>
+    <a href="#flavors">Flavors</a>
+    <a href="#escalas">Escala units</a>
+  </nav>
+  <div class="doc-main">
+    <h1>Deploy</h1>
+    <div class="sub">Los comandos se ejecutan en el worktree seleccionado arriba. Completa los pasos en orden, sin omitir verificaciones.</div>
+
+    <!-- ══ PRE-VUELO ══ -->
+    <h2 id="preflight">✈️ Pre-vuelo — una sola vez por sesión de deploy</h2>
+    <p>Aplica a los tres ambientes. Hazlo primero, antes de tocar iOS o Android.</p>
+
+    <div class="checklist" id="cl-preflight">
+      <div class="cl-hdr">
+        <span class="cl-title">Pre-vuelo</span>
+        <span class="cl-progress" id="cl-preflight-prog">0 / 6</span>
+        <button class="cl-reset" onclick="resetCL('preflight')">Reiniciar</button>
+      </div>
+
+      <div class="cl-section">Git — el código está listo</div>
+      <div class="cl-item" id="cli-preflight-0">
+        <div class="cl-cb" onclick="toggleCL('preflight',0)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Sin cambios pendientes de commit</div>
+          <div class="cl-note">Si hay archivos sin commit, el build puede quedar inconsistente.</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('git-status','git status')">▶ git status</button></div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-preflight-1">
+        <div class="cl-cb" onclick="toggleCL('preflight',1)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Rama publicada en origin</div>
+          <div class="cl-note">La rama debe existir en origin antes de cerrar o cambiar de cliente.</div>
+          <div class="cl-actions">
+            <button class="cl-run" onclick="runCmd('git-push','git push origin')">▶ git push</button>
+            <button class="cl-run" onclick="runCmd('git-log','git log')">▶ ver log</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="cl-section">Flutter — compila y está limpio</div>
+      <div class="cl-item" id="cli-preflight-2">
+        <div class="cl-cb" onclick="toggleCL('preflight',2)"></div>
+        <div class="cl-body">
+          <div class="cl-label">flutter analyze — cero errores</div>
+          <div class="cl-note">Warnings están bien. Errores de análisis rompen builds de producción.</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('flutter-analyze','flutter analyze')">▶ Ejecutar</button></div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-preflight-3">
+        <div class="cl-cb" onclick="toggleCL('preflight',3)"></div>
+        <div class="cl-body">
+          <div class="cl-label">flutter test — todos en verde</div>
+          <div class="cl-note">Incluye el guard de Firebase: si algún paquete de la familia está clavado a versión exacta, el test falla aquí — antes de los 8 min de archive.</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('flutter-test','flutter test')">▶ Ejecutar</button></div>
+        </div>
+      </div>
+
+      <div class="cl-section">Dependencias — Firebase se mueve junta</div>
+      <div class="cl-item" id="cli-preflight-4">
+        <div class="cl-cb" onclick="toggleCL('preflight',4)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Ningún paquete Firebase clavado a versión exacta</div>
+          <div class="cl-note">Clavar solo <code>cloud_firestore</code> mató toda query de Firestore en runtime (2026-08-12). El <code>flutter test</code> de arriba ya lo verifica — si pasó, este paso está OK.</div>
+        </div>
+      </div>
+
+      <div class="cl-section">Procesos</div>
+      <div class="cl-item" id="cli-preflight-5">
+        <div class="cl-cb" onclick="toggleCL('preflight',5)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Sin procesos flutter/xcodebuild activos</div>
+          <div class="cl-note">Dos builds contra el mismo device se pelean el output.</div>
+          <div class="cl-actions">
+            <button class="cl-run" onclick="runCmd('check-builds','Builds vivos')">▶ Ver builds</button>
+            <button class="cl-run" onclick="runCmd('kill-builds','Matar builds')">⏹ Matar todo</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cal info">💡 Pre-vuelo en verde → elige el ambiente y ejecuta iOS y Android en ese orden.</div>
+    <hr>
+
+    <!-- ══ DEV ══ -->
+    <h2 id="env-dev">🟣 DEV — iOS + Android</h2>
+    <p><code>com.cocoa.cocoa.dev</code> (iOS) · <code>com.cocoa.cocoadev</code> (Android) · Track interno</p>
+
+    <div class="checklist" id="cl-env-dev">
+      <div class="cl-hdr">
+        <span class="cl-title">DEV completo</span>
+        <span class="cl-progress" id="cl-env-dev-prog">0 / 8</span>
+        <button class="cl-reset" onclick="resetCL('env-dev')">Reiniciar</button>
+      </div>
+
+      <div class="cl-section">Paso 0 — Prerequisito</div>
+      <div class="cl-item" id="cli-env-dev-0">
+        <div class="cl-cb" onclick="toggleCL('env-dev',0)"></div>
+        <div class="cl-body"><div class="cl-label">Pre-vuelo completo ✅</div></div>
+      </div>
+
+      <div class="cl-section">iOS primero — TestFlight</div>
+      <div class="cl-item" id="cli-env-dev-1">
+        <div class="cl-cb" onclick="toggleCL('env-dev',1)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Verificar que <code>ios/.asc.env</code> existe</div>
+          <div class="cl-note">El hook de worktrees lo enlaza desde el repositorio canónico. Si falta, restaura el enlace antes de compilar.</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('check-asc-env','Verificar .asc.env')">▶ Verificar</button></div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-env-dev-2">
+        <div class="cl-cb" onclick="toggleCL('env-dev',2)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Ejecutar <code>./scripts/testflight.sh dev</code></div>
+          <div class="cl-note">Build number de ASC + pod install + archive incremental + export + upload. ~10-15 min.</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('ios-dev','iOS DEV → TestFlight')">▶ Ejecutar</button></div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-env-dev-3">
+        <div class="cl-cb" onclick="toggleCL('env-dev',3)"></div>
+        <div class="cl-body">
+          <div class="cl-label">iOS subido a TestFlight — esperar que procese</div>
+          <div class="cl-note">Tarda unos minutos en aparecer procesado. Mientras tanto, ejecuta el build de Android.</div>
+        </div>
+      </div>
+
+      <div class="cl-section">Android segundo — Google Play</div>
+      <div class="cl-item" id="cli-env-dev-4">
+        <div class="cl-cb" onclick="toggleCL('env-dev',4)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Build el .aab DEV</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('aab-dev','Android DEV .aab')">▶ Build</button></div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-env-dev-5">
+        <div class="cl-cb" onclick="toggleCL('env-dev',5)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Abrir Finder y subir a Play Console (track Interno)</div>
+          <div class="cl-note"><code>build/app/outputs/bundle/devRelease/app-dev-release.aab</code><br>Play Console → Cocoa DEV → Pruebas internas → Crear versión</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('open-aab-dev','Abrir AAB DEV en Finder')">▶ Abrir en Finder</button></div>
+        </div>
+      </div>
+
+      <div class="cl-section">Smoke test — ambos dispositivos</div>
+      <div class="cl-item" id="cli-env-dev-6">
+        <div class="cl-cb" onclick="toggleCL('env-dev',6)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Smoke test iOS (Cocoa DEV)</div>
+          <div class="cl-note"><strong>Archive verde ≠ app funcionando.</strong> Si tocó Firebase/pods: home → saldo → points card → movimientos.</div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-env-dev-7">
+        <div class="cl-cb" onclick="toggleCL('env-dev',7)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Smoke test Android (Cocoa DEV)</div>
+          <div class="cl-note">Home → saldo → puntos → 1 flujo principal.</div>
+        </div>
+      </div>
+    </div>
+    <hr>
+
+    <!-- ══ STAGING ══ -->
+    <h2 id="env-staging">🟡 STAGING — iOS + Android</h2>
+    <p><code>com.cocoa.cocoa.staging</code> (iOS) · <code>com.cocoa.cocoatest</code> (Android) · Track pruebas internas</p>
+
+    <div class="checklist" id="cl-env-staging">
+      <div class="cl-hdr">
+        <span class="cl-title">STAGING completo</span>
+        <span class="cl-progress" id="cl-env-staging-prog">0 / 8</span>
+        <button class="cl-reset" onclick="resetCL('env-staging')">Reiniciar</button>
+      </div>
+
+      <div class="cl-section">Paso 0 — Prerequisito</div>
+      <div class="cl-item" id="cli-env-staging-0">
+        <div class="cl-cb" onclick="toggleCL('env-staging',0)"></div>
+        <div class="cl-body"><div class="cl-label">Pre-vuelo completo ✅</div></div>
+      </div>
+
+      <div class="cl-section">iOS primero — TestFlight</div>
+      <div class="cl-item" id="cli-env-staging-1">
+        <div class="cl-cb" onclick="toggleCL('env-staging',1)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Verificar que <code>ios/.asc.env</code> existe</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('check-asc-env','Verificar .asc.env')">▶ Verificar</button></div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-env-staging-2">
+        <div class="cl-cb" onclick="toggleCL('env-staging',2)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Ejecutar <code>./scripts/testflight.sh staging</code></div>
+          <div class="cl-note">Scheme: Runner-Staging · Config: Staging-Release · Bundle: com.cocoa.cocoa.staging</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('ios-staging','iOS STAGING → TestFlight')">▶ Ejecutar</button></div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-env-staging-3">
+        <div class="cl-cb" onclick="toggleCL('env-staging',3)"></div>
+        <div class="cl-body">
+          <div class="cl-label">iOS subido a TestFlight — esperar que procese</div>
+          <div class="cl-note">Tarda unos minutos. Mientras tanto, ejecuta el build de Android.</div>
+        </div>
+      </div>
+
+      <div class="cl-section">Android segundo — Google Play</div>
+      <div class="cl-item" id="cli-env-staging-4">
+        <div class="cl-cb" onclick="toggleCL('env-staging',4)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Build el .aab STAGING</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('aab-staging','Android STAGING .aab')">▶ Build</button></div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-env-staging-5">
+        <div class="cl-cb" onclick="toggleCL('env-staging',5)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Abrir Finder y subir a Play Console (track Pruebas internas)</div>
+          <div class="cl-note"><code>build/app/outputs/bundle/stagingRelease/app-staging-release.aab</code><br>Play Console → Cocoa TEST → Pruebas internas → Crear versión</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('open-aab-staging','Abrir AAB STAGING en Finder')">▶ Abrir en Finder</button></div>
+        </div>
+      </div>
+
+      <div class="cl-section">Smoke test — ambos dispositivos</div>
+      <div class="cl-item" id="cli-env-staging-6">
+        <div class="cl-cb" onclick="toggleCL('env-staging',6)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Smoke test iOS (Cocoa TEST)</div>
+          <div class="cl-note">Home → saldo → points card → movimientos → 1 canje o fondeo.</div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-env-staging-7">
+        <div class="cl-cb" onclick="toggleCL('env-staging',7)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Smoke test Android (Cocoa TEST)</div>
+          <div class="cl-note">Mismo flujo. Si algo falla acá, no sube a PROD.</div>
+        </div>
+      </div>
+    </div>
+    <hr>
+
+    <!-- ══ PROD ══ -->
+    <h2 id="env-prod">🟢 PROD — iOS + Android</h2>
+    <p><code>com.cocoa.cocoaprod</code> · Track Producción · No hay segunda oportunidad.</p>
+    <div class="cal warn">⚠️ Solo subir a PROD cuando STAGING fue aprobado en ambas plataformas.</div>
+
+    <div class="checklist" id="cl-env-prod">
+      <div class="cl-hdr">
+        <span class="cl-title">PROD completo</span>
+        <span class="cl-progress" id="cl-env-prod-prog">0 / 11</span>
+        <button class="cl-reset" onclick="resetCL('env-prod')">Reiniciar</button>
+      </div>
+
+      <div class="cl-section">Paso 0 — Prerequisites</div>
+      <div class="cl-item" id="cli-env-prod-0">
+        <div class="cl-cb" onclick="toggleCL('env-prod',0)"></div>
+        <div class="cl-body"><div class="cl-label">Pre-vuelo completo ✅</div></div>
+      </div>
+      <div class="cl-item" id="cli-env-prod-1">
+        <div class="cl-cb" onclick="toggleCL('env-prod',1)"></div>
+        <div class="cl-body">
+          <div class="cl-label">STAGING aprobado en iOS y Android</div>
+          <div class="cl-note">Los smoke tests de STAGING pasaron en ambas plataformas.</div>
+        </div>
+      </div>
+
+      <div class="cl-section">iOS primero — TestFlight</div>
+      <div class="cl-item" id="cli-env-prod-2">
+        <div class="cl-cb" onclick="toggleCL('env-prod',2)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Verificar que <code>ios/.asc.env</code> existe</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('check-asc-env','Verificar .asc.env')">▶ Verificar</button></div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-env-prod-3">
+        <div class="cl-cb" onclick="toggleCL('env-prod',3)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Ejecutar <code>./scripts/testflight.sh prod</code></div>
+          <div class="cl-note">Bundle: com.cocoa.cocoaprod — este sube a la ficha real de la app.</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('ios-prod','iOS PROD → TestFlight')">▶ Ejecutar</button></div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-env-prod-4">
+        <div class="cl-cb" onclick="toggleCL('env-prod',4)"></div>
+        <div class="cl-body">
+          <div class="cl-label">iOS subido — esperar que procese</div>
+          <div class="cl-note">Mientras tanto, ejecuta el build de Android.</div>
+        </div>
+      </div>
+
+      <div class="cl-section">Android segundo — Google Play</div>
+      <div class="cl-item" id="cli-env-prod-5">
+        <div class="cl-cb" onclick="toggleCL('env-prod',5)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Build el .aab PROD</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('aab-prod','Android PROD .aab')">▶ Build</button></div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-env-prod-6">
+        <div class="cl-cb" onclick="toggleCL('env-prod',6)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Abrir Finder y subir a Play Console (track Producción)</div>
+          <div class="cl-note"><code>build/app/outputs/bundle/prodRelease/app-prod-release.aab</code><br>Play Console → Cocoa → Producción → Crear versión → Enviar a revisión</div>
+          <div class="cl-actions"><button class="cl-run" onclick="runCmd('open-aab-prod','Abrir AAB PROD en Finder')">▶ Abrir en Finder</button></div>
+        </div>
+      </div>
+
+      <div class="cl-section">Smoke test — ambos</div>
+      <div class="cl-item" id="cli-env-prod-7">
+        <div class="cl-cb" onclick="toggleCL('env-prod',7)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Smoke test iOS PROD</div>
+          <div class="cl-note">Home → saldo → points card → movimientos. <strong>En PROD no hay segunda oportunidad.</strong></div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-env-prod-8">
+        <div class="cl-cb" onclick="toggleCL('env-prod',8)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Smoke test Android PROD</div>
+          <div class="cl-note">Mismo flujo en Android.</div>
+        </div>
+      </div>
+
+      <div class="cl-section">Distribución</div>
+      <div class="cl-item" id="cli-env-prod-9">
+        <div class="cl-cb" onclick="toggleCL('env-prod',9)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Activar distribución en App Store Connect (si aplica)</div>
+          <div class="cl-note">Si necesita App Review, iniciar revisión en appstoreconnect.apple.com.</div>
+        </div>
+      </div>
+      <div class="cl-item" id="cli-env-prod-10">
+        <div class="cl-cb" onclick="toggleCL('env-prod',10)"></div>
+        <div class="cl-body">
+          <div class="cl-label">Monitorear revisión de Play Store (24-48h)</div>
+          <div class="cl-note">Google puede rechazar el build. Verificar que no haya pendientes en Play Console.</div>
+        </div>
+      </div>
+    </div>
+    <hr>
+
+    <!-- ══ REFERENCIA ══ -->
+    <h2 id="flavors">🗂 Flavors</h2>
+    <div class="fg">
+      <div class="fc dev"><div class="fn">DEV</div>
+        <div class="kv"><div class="k">Entry</div><div class="v">lib/main_dev.dart</div></div>
+        <div class="kv"><div class="k">iOS</div><div class="v">com.cocoa.cocoa.dev</div></div>
+        <div class="kv"><div class="k">Android</div><div class="v">com.cocoa.cocoadev</div></div></div>
+      <div class="fc staging"><div class="fn">STAGING</div>
+        <div class="kv"><div class="k">Entry</div><div class="v">lib/main_staging.dart</div></div>
+        <div class="kv"><div class="k">iOS</div><div class="v">com.cocoa.cocoa.staging</div></div>
+        <div class="kv"><div class="k">Android</div><div class="v">com.cocoa.cocoatest</div></div></div>
+      <div class="fc prod"><div class="fn">PROD</div>
+        <div class="kv"><div class="k">Entry</div><div class="v">lib/main_prod.dart</div></div>
+        <div class="kv"><div class="k">iOS</div><div class="v">com.cocoa.cocoaprod</div></div>
+        <div class="kv"><div class="k">Android</div><div class="v">com.cocoa.cocoaprod</div></div></div>
+    </div>
+
+    <h2 id="escalas">⚖️ Escala units vs Cocoas</h2>
+    <table>
+      <tr><th>Campo</th><th>Escala</th><th>Uso</th></tr>
+      <tr><td>delta, delta_units, funded_units (ledger)</td><td>Units × 10.000</td><td class="pl">Dividir ÷ 10.000</td></tr>
+      <tr><td>cashback.total_units, base_units, extra_units</td><td>Cocoas directos</td><td class="pl">NO dividir — formatPoints()</td></tr>
+      <tr><td>redemption.points, gross_points</td><td>Cocoas directos</td><td class="pl">formatPoints()</td></tr>
+    </table>
+  </div>
+</div>
+</div>
+
+<!-- NOTES -->
+<div id="panel-notes" class="panel">
+<div class="notes-wrap">
+  <h1 style="font-size:20px;font-weight:700;margin-bottom:4px">Notas</h1>
+  <div style="color:var(--mu);font-size:13px;margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid var(--bd)">Globales — no dependen del worktree. Se guardan en el browser.</div>
+  <div class="ns"><div class="nt">Backend</div><div class="nsu">Contratos, endpoints, bugs, reglas de negocio.</div>
+    <textarea class="na" id="n-backend" placeholder="Ej: /mobile/auth/verify-otp devuelve state:false con msg ok cuando expira..." oninput="saveNote('n-backend')"></textarea>
+    <div class="ns-sv" id="n-backend-sv">✓ Guardado</div></div>
+  <div class="ns"><div class="nt">Flutter</div><div class="nsu">Decisiones de UI, gotchas, patrones, bugs.</div>
+    <textarea class="na" id="n-frontend" placeholder="Ej: TituloWidget tiene align:Alignment.centerLeft por defecto..." oninput="saveNote('n-frontend')"></textarea>
+    <div class="ns-sv" id="n-frontend-sv">✓ Guardado</div></div>
+  <div class="ns"><div class="nt">Deploy / Triangulación</div><div class="nsu">Incidentes, worktrees activos, recibos y estado de sesiones.</div>
+    <textarea class="na" id="n-deploy" placeholder="Ej: worktree ankara — feat/hr-inbox-app — 3 commits sin push. Terminar el 28/08..." oninput="saveNote('n-deploy')"></textarea>
+    <div class="ns-sv" id="n-deploy-sv">✓ Guardado</div></div>
+  <div class="ns"><div class="nt">Contexto de sesion / Proximos pasos</div><div class="nsu">Lo que necesitas recordar cuando se acabe el limite de tokens.</div>
+    <textarea class="na" id="n-misc" style="min-height:160px" placeholder="Que estabas haciendo, que falta, que decidiste, preguntas pendientes..." oninput="saveNote('n-misc')"></textarea>
+    <div class="ns-sv" id="n-misc-sv">✓ Guardado</div></div>
+</div>
+</div>
+
+<!-- TERMINAL -->
+<div class="term" id="term">
+  <div class="term-tb">
+    <span class="term-dot" id="term-dot"></span>
+    <span class="term-label" id="term-label">Terminal</span>
+    <span class="term-st" id="term-st"></span>
+    <button class="term-btn" onclick="cancelCmd()">⏹ Detener</button>
+    <button class="term-btn" onclick="closeTerm()" style="margin-left:4px">✕</button>
+  </div>
+  <div id="term-out"></div>
+</div>
+
+<script>
+const ENVS={dev:'https://api-dev.cocoalatam.com/',staging:'https://api-zccwfarkoq-uc.a.run.app/',prod:'https://api.cocoalatam.com/'};
+const SRV=location.protocol==='http:'?location.origin:'http://localhost:7777';
+let serverOk=false,resView='pretty',lastRes=null,history=[],xhdrs=[],termCtrl=null;
+let currentCwd='',worktrees=[],allWorktrees=[],triangulations=[],archivedTriangulations=[],showArchived=false;
+const REQUIRED_ROLES=['back','front','app'];
+
+// Checklist state
+const CL_DEFS={'preflight':6,'env-dev':8,'env-staging':8,'env-prod':11};
+let clState={};
+
+function toggleCL(id,idx){
+  if(!clState[id])clState[id]=[];
+  const i=clState[id].indexOf(idx);
+  if(i>=0)clState[id].splice(i,1);else clState[id].push(idx);
+  saveCLState();renderCL(id);
+}
+function resetCL(id){clState[id]=[];saveCLState();renderCL(id);}
+function saveCLState(){localStorage.setItem('coa-cl',JSON.stringify(clState));}
+function loadCLState(){try{clState=JSON.parse(localStorage.getItem('coa-cl')||'{}')}catch{clState={}};}
+function renderCL(id){
+  const done=clState[id]||[];
+  const total=CL_DEFS[id]||0;
+  document.getElementById('cl-'+id+'-prog').textContent=done.length+' / '+total;
+  for(let i=0;i<total;i++){
+    const item=document.getElementById('cli-'+id+'-'+i);
+    if(!item)continue;
+    const isDone=done.includes(i);
+    item.classList.toggle('done',isDone);
+    const cb=item.querySelector('.cl-cb');
+    if(cb)cb.classList.toggle('checked',isDone);
+  }
+}
+function renderAllCL(){Object.keys(CL_DEFS).forEach(id=>renderCL(id));}
+
+function cpyTxt(btn,txt){navigator.clipboard.writeText(txt).then(()=>{btn.classList.add('ok');btn.textContent='✓ Copiado';setTimeout(()=>{btn.classList.remove('ok');btn.textContent='Copiar grep';},1800);});}
+
+// ── Server ──────────────────────────────────────────────────────
+async function checkServer(){
+  const wasOnline=serverOk;
+  try{const r=await fetch(SRV+'/api/health',{signal:AbortSignal.timeout(1500)});serverOk=r.ok;}catch{serverOk=false;}
+  document.getElementById('srv-dot').className='srv-dot '+(serverOk?'ok':'err');
+  document.getElementById('srv-lbl').textContent=serverOk?'servidor OK':'sin servidor';
+  if(!wasOnline&&serverOk&&document.readyState==='complete')refreshWorktrees();
+}
+
+// ── Worktree ────────────────────────────────────────────────────
+async function initWtBar(){
+  currentCwd=localStorage.getItem('coa-cwd')||'';
+  if(serverOk)await refreshWorktrees();
+  else updateWtCards([],'Inicia el servidor con el comando devtools.');
+}
+async function refreshWorktrees(){
+  if(!serverOk){updateWtCards([],'No se puede conectar con Cocoa DevTools.');return;}
+  document.getElementById('wt-sel').innerHTML='<option>Cargando...</option>';
+  let errorMessage='';
+  try{
+    const r=await fetch(SRV+'/api/triangulations');
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'No se pudo cargar el inventario.');
+    allWorktrees=d.worktrees||[];triangulations=d.triangulations||[];archivedTriangulations=d.archived_triangulations||[];
+  }catch(e){allWorktrees=[];worktrees=[];triangulations=[];archivedTriangulations=[];errorMessage=e.message;}
+  syncVisibleWorktrees();
+  if(!worktrees.some(wt=>wt.path===currentCwd)){
+    currentCwd=triangulations[0]?.worktrees?.find(wt=>wt.role==='back')?.path||worktrees[0]?.path||'';
+    if(currentCwd)localStorage.setItem('coa-cwd',currentCwd);
+  }
+  renderWtDropdown();updateWtCards(visibleGroups(),errorMessage);renderAuditSummary();
+}
+function visibleGroups(){return showArchived?[...triangulations,...archivedTriangulations]:triangulations;}
+function syncVisibleWorktrees(){
+  const paths=new Set(visibleGroups().flatMap(group=>group.worktrees.map(wt=>wt.path)));
+  worktrees=allWorktrees.filter(wt=>paths.has(wt.path));
+}
+function toggleArchived(){
+  showArchived=!showArchived;syncVisibleWorktrees();
+  if(!worktrees.some(wt=>wt.path===currentCwd)){currentCwd=worktrees[0]?.path||'';if(currentCwd)localStorage.setItem('coa-cwd',currentCwd);}
+  document.getElementById('toggle-archived').textContent=showArchived?'Ocultar cerradas':`Mostrar cerradas (${archivedTriangulations.length})`;
+  renderWtDropdown();updateWtCards(visibleGroups());
+}
+function renderWtDropdown(){
+  const sel=document.getElementById('wt-sel');
+  if(!worktrees.length){sel.innerHTML='<option value="">Sin worktrees</option>';return;}
+  sel.innerHTML=worktrees.map((wt,index)=>`<option value="${index}" ${wt.path===currentCwd?'selected':''}>${esc(wt.role)} · ${esc(wt.branch)} (${esc(wt.slug||wt.path.split('/').pop())})</option>`).join('');
+  if(currentCwd)loadWtInfo(currentCwd);
+}
+async function selectWorktree(index){
+  const path=worktrees[Number(index)]?.path||'';
+  if(!path)return;
+  currentCwd=path;localStorage.setItem('coa-cwd',path);await loadWtInfo(path);
+}
+async function loadWtInfo(cwd){
+  const bb=document.getElementById('wt-branch'),bv=document.getElementById('wt-version');
+  bb.style.display='none';bv.style.display='none';
+  if(!cwd||!serverOk)return;
+  try{
+    const r=await fetch(SRV+'/api/info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cwd})});
+    const d=await r.json();
+    if(d.branch){bb.textContent=`${d.role||'repo'} · ⎇ ${d.branch}`;bb.style.display='';}
+    if(d.version||d.base_ref){bv.textContent=d.version?`v${d.version} · ${d.base_ref}`:d.base_ref;bv.style.display='';}
+  }catch{}
+}
+function updateWtCards(groups,message=''){
+  const el=document.getElementById('wt-cards');
+  if(!groups.length){el.innerHTML=`<div class="wt-loading">${esc(message||'No se encontraron triangulaciones.')}</div>`;return;}
+  el.innerHTML=groups.map((group,index)=>triCard(group,index)).join('');
+}
+function qaKey(slug){return'coa-qa-'+slug;}
+function getQaState(slug){
+  try{return JSON.parse(localStorage.getItem(qaKey(slug))||'{"status":"pending","note":""}');}
+  catch{return{status:'pending',note:''};}
+}
+function saveQaState(groupIndex){
+  const group=triangulations[groupIndex];if(!group)return;
+  const status=document.getElementById('qa-status-'+groupIndex)?.value||'pending';
+  const note=document.getElementById('qa-note-'+groupIndex)?.value||'';
+  localStorage.setItem(qaKey(group.slug),JSON.stringify({status,note}));renderAuditSummary();
+}
+function triCard(group,index){
+  if(group.archived){
+    const receipt=group.archive||{};
+    return`<section class="tri-card archived">
+      <div class="tri-head">
+        <span class="tri-slug">${esc(group.slug)}</span>
+        <span class="tri-count">Cerrada · ${esc((receipt.archived_at||'').slice(0,10))}</span>
+        <span class="tri-archive">${esc(receipt.evidence||'Cierre registrado')}</span>
+        <button class="wt-btn" onclick="restoreGroup('${escAttr(group.slug)}')">Restaurar al QA</button>
+      </div>
+      <div class="tri-body">${group.worktrees.map(wt=>wtCard(wt)).join('')}</div>
+    </section>`;
+  }
+  const qa=getQaState(group.slug),roles=new Set(group.worktrees.map(wt=>wt.role));
+  const missing=REQUIRED_ROLES.filter(role=>!roles.has(role));
+  return`<section class="tri-card">
+    <div class="tri-head">
+      <span class="tri-slug">${esc(group.slug)}</span>
+      <span class="tri-count">${group.dirty} sin commit · ${group.unpushed} sin push${missing.length?' · faltan '+missing.join(', '):''}</span>
+      <select class="tri-qa" id="qa-status-${index}" onchange="saveQaState(${index})">
+        <option value="pending" ${qa.status==='pending'?'selected':''}>QA pendiente</option>
+        <option value="verified" ${qa.status==='verified'?'selected':''}>QA verificado</option>
+        <option value="blocked" ${qa.status==='blocked'?'selected':''}>QA bloqueado</option>
+        <option value="integrated" ${qa.status==='integrated'?'selected':''} disabled>Integrado en dev</option>
+      </select>
+      <input class="tri-note" id="qa-note-${index}" value="${escAttr(qa.note||'')}" placeholder="Evidencia, pruebas o bloqueo..." oninput="saveQaState(${index})">
+      <button class="wt-btn" onclick="archiveGroup(${index})">Archivar cerrada</button>
+    </div>
+    <div class="tri-body">${group.worktrees.map(wt=>wtCard(wt)).join('')}</div>
+  </section>`;
+}
+function wtCard(wt){
+  const isActive=wt.path===currentCwd,index=worktrees.findIndex(item=>item.path===wt.path);
+  const dirty=wt.dirty,unpushed=wt.unpushed;
+  let statHtml='';
+  if(dirty===0&&unpushed===0&&wt.ahead_base===0&&wt.behind_base===0)statHtml='<div class="wt-stat"><div class="dot dot-ok"></div><span class="txt ok">Integrado en dev</span></div>';
+  else{
+    if(dirty>0)statHtml+=`<div class="wt-stat"><div class="dot dot-warn"></div><span class="txt warn">${dirty} sin commit</span></div>`;
+    if(unpushed>0)statHtml+=`<div class="wt-stat"><div class="dot dot-err"></div><span class="txt err">${unpushed} sin push — riesgo de perder trabajo</span></div>`;
+    if(wt.ahead_base>0)statHtml+=`<div class="wt-stat"><div class="dot dot-warn"></div><span class="txt warn">${wt.ahead_base} pendiente de dev</span></div>`;
+  }
+  if(wt.behind_base>0)statHtml+=`<div class="wt-stat"><div class="dot dot-mu"></div><span class="txt">${wt.behind_base} detrás de ${esc(wt.base_ref)}</span></div>`;
+  const selectBtn=isActive?'':`<button class="wt-btn primary" onclick="selectWorktreeCard(${index})">Seleccionar</button>`;
+  return`<div class="wt-card ${isActive?'active':''}">
+    <div class="wt-card-top"><span class="role-badge">${esc(wt.role)}</span><span class="wt-card-branch">${esc(wt.branch)}</span>${isActive?'<span class="wt-card-active">activo</span>':''}</div>
+    <div class="wt-card-path">${esc(wt.path)}</div>
+    <div class="base-badge">base ${esc(wt.base_ref)} · upstream ${esc(wt.upstream||'sin upstream')} · +${wt.ahead_base}/-${wt.behind_base}</div>
+    <div class="wt-card-meta">${statHtml}</div>
+    ${wt.last_commit?`<div class="wt-last-commit">"${esc(wt.last_commit)}"</div>`:''}
+    <div class="wt-card-btns">
+      ${selectBtn}
+      <button class="wt-btn" onclick="runCmdFor(${index},'git-status','git status')">Status</button>
+      <button class="wt-btn" onclick="runCmdFor(${index},'git-log','git log')">Log</button>
+      <button class="wt-btn" onclick="runCmdFor(${index},'git-diff','git diff')">Diff</button>
+    </div>
+  </div>`;
+}
+async function selectWorktreeCard(index){
+  await selectWorktree(index);document.getElementById('wt-sel').value=String(index);updateWtCards(visibleGroups());
+}
+function runCmdFor(index,key,label){const cwd=worktrees[index]?.path;if(cwd)runCmdIn(key,label,cwd);}
+async function archiveGroup(index){
+  const group=triangulations[index];if(!group)return;
+  const evidence=getQaState(group.slug).note?.trim()||'';
+  if(!evidence){alert('Escribe primero en Evidencia el PR, commit o recibo QA que demuestra el cierre.');return;}
+  if(!confirm(`Se ocultará “${group.slug}” como cerrada sin borrar ramas ni worktrees. ¿Continuar?`))return;
+  const r=await fetch(SRV+'/api/archive-triangulation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slug:group.slug,action:'archive',evidence})});
+  const d=await r.json();if(!r.ok){alert(d.error||'No se pudo archivar.');return;}await refreshWorktrees();
+}
+async function restoreGroup(slug){
+  const r=await fetch(SRV+'/api/archive-triangulation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slug,action:'restore'})});
+  const d=await r.json();if(!r.ok){alert(d.error||'No se pudo restaurar.');return;}await refreshWorktrees();
+}
+function renderAuditSummary(){
+  const verified=triangulations.filter(group=>getQaState(group.slug).status==='verified');
+  const dirty=triangulations.reduce((sum,group)=>sum+group.dirty,0);
+  const unpushed=triangulations.reduce((sum,group)=>sum+group.unpushed,0);
+  const ready=verified.filter(group=>{
+    const roles=new Set(group.worktrees.map(wt=>wt.role));
+    return REQUIRED_ROLES.every(role=>roles.has(role))&&group.worktrees.every(wt=>wt.dirty===0&&wt.branch!=='(detached)'&&wt.behind_base===0);
+  });
+  document.getElementById('audit-summary').textContent=`${triangulations.length} activas · ${archivedTriangulations.length} cerradas · ${verified.length} verificadas · ${dirty} cambios sin commit · ${unpushed} commits sin push`;
+  document.getElementById('toggle-archived').textContent=showArchived?'Ocultar cerradas':`Mostrar cerradas (${archivedTriangulations.length})`;
+  const button=document.getElementById('push-verified');button.disabled=ready.length!==1;
+}
+async function promoteVerified(){
+  const verified=triangulations.filter(group=>getQaState(group.slug).status==='verified');
+  if(verified.length!==1){alert('Debes integrar exactamente una triangulación verificada por vez.');return;}
+  const incomplete=verified.filter(group=>{
+    const roles=new Set(group.worktrees.map(wt=>wt.role));return REQUIRED_ROLES.some(role=>!roles.has(role));
+  });
+  if(incomplete.length){alert('No se integrará: faltan backend, panel o app.');return;}
+  const unsafe=verified.flatMap(group=>group.worktrees.filter(wt=>wt.dirty>0||wt.branch==='(detached)'));
+  if(unsafe.length){alert('No se integrará: existen worktrees con cambios sin commit o en detached HEAD.');return;}
+  const stale=verified[0].worktrees.filter(wt=>wt.behind_base>0);
+  if(stale.length){alert('No se integrará: todos los worktrees deben contener el último origin/dev. Actualiza o rebasa primero.');return;}
+  const group=verified[0],paths=group.worktrees.map(wt=>wt.path);
+  if(!confirm(`Se validarán backend, panel y app antes de actualizar origin/dev para “${group.slug}”. ¿Continuar?`))return;
+  openTerm('Integrar triangulación a dev');appendTerm('Actualizando origin/dev y prevalidando los tres repositorios antes del primer push...\n');
+  try{
+    const r=await fetch(SRV+'/api/promote-dev',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({group:{slug:group.slug,paths}})});
+    const d=await r.json();
+    (d.promoted||[]).forEach(item=>appendTerm(`\n${item.role} · ${item.status}\n${item.cwd}\ndev=${item.dev_head||'pendiente'}\n${item.output||''}\n`));
+    if(d.failed)appendTerm(`\nFALLO · ${d.failed.role}\n${d.failed.output||''}\n`);
+    if(!r.ok){
+      if(d.integration_complete)appendTerm('\n[AVISO] La integración llegó a dev, pero el servidor no pudo persistir el cierre. Es seguro reintentar.\n');
+      throw new Error(d.error||'No se pudo completar la integración a dev.');
+    }
+    const qa=getQaState(group.slug);localStorage.setItem(qaKey(group.slug),JSON.stringify({status:'integrated',note:qa.note||''}));
+    if(d.archive)appendTerm(`\nCierre archivado · ${d.archive.archived_at}\n`);
+    document.getElementById('term-dot').className='term-dot ok';document.getElementById('term-st').textContent='Completado ✓';
+    await refreshWorktrees();
+  }catch(e){appendTerm(`\n[ERROR] ${e.message}\n`);document.getElementById('term-dot').className='term-dot err';document.getElementById('term-st').textContent='Fallo ✗';}
+}
+
+// ── Tabs ────────────────────────────────────────────────────────
+function showTab(n,btn){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));
+  document.querySelectorAll('.tab').forEach(b=>b.classList.remove('on'));
+  document.getElementById('panel-'+n).classList.add('on');btn.classList.add('on');
+  if(n==='wt')refreshWorktrees();
+}
+function showPTab(n,btn,g){
+  if(g==='req'){document.getElementById('req-body').style.display=n==='body'?'block':'none';document.getElementById('req-hdrs').style.display=n==='hdrs'?'block':'none';}
+  else{resView=n;renderRes();}
+  btn.closest('.ptabs').querySelectorAll('.ptab').forEach(b=>b.classList.remove('on'));btn.classList.add('on');
+}
+
+// ── Config ──────────────────────────────────────────────────────
+function saveCfg(){localStorage.setItem('coa-env',document.getElementById('env-sel').value);localStorage.setItem('coa-tok',document.getElementById('tok').value);}
+function loadCfg(){document.getElementById('env-sel').value=localStorage.getItem('coa-env')||'staging';document.getElementById('tok').value=localStorage.getItem('coa-tok')||'';}
+function toggleTok(){const t=document.getElementById('tok');t.type=t.type==='password'?'text':'password';}
+
+// ── History ─────────────────────────────────────────────────────
+function saveHist(){localStorage.setItem('coa-hist',JSON.stringify(history.slice(0,50)));}
+function loadHist(){try{history=JSON.parse(localStorage.getItem('coa-hist')||'[]');}catch{history=[];}renderHist();}
+function clearHist(){history=[];saveHist();renderHist();}
+function renderHist(){
+  const el=document.getElementById('hist-list');
+  if(!history.length){el.innerHTML='<div class="hist-empty">Sin solicitudes todavía.</div>';return;}
+  el.innerHTML=history.map((h,i)=>`<div class="hi" onclick="loadHi(${i})"><div class="m ${h.method}">${h.method}</div><div class="p">${h.path}</div><div class="e">${h.env.toUpperCase()} · ${h.status||'—'} · ${h.ms?h.ms+'ms':''}</div></div>`).join('');
+  document.getElementById('path-dl').innerHTML=[...new Set(history.map(h=>h.path))].map(p=>`<option value="${p}">`).join('');
+}
+function loadHi(i){const h=history[i];document.getElementById('env-sel').value=h.env;document.getElementById('meth').value=h.method;document.getElementById('path-in').value=h.path;document.getElementById('body-ed').value=h.body||'';}
+
+// ── Extra headers ────────────────────────────────────────────────
+function addHdr(k='',v=''){const id=Date.now()+Math.random();xhdrs.push({id,k,v});renderXHdrs();}
+function delHdr(id){xhdrs=xhdrs.filter(h=>h.id!==id);renderXHdrs();}
+function updHdr(id,f,val){const h=xhdrs.find(x=>x.id===id);if(h)h[f]=val;}
+function renderXHdrs(){document.getElementById('xhdrs').innerHTML=xhdrs.map(h=>`<div class="hrow"><input class="hk" value="${h.k}" placeholder="Key" oninput="updHdr(${h.id},'k',this.value)"><input class="hv" value="${h.v}" placeholder="Value" oninput="updHdr(${h.id},'v',this.value)"><button class="hdel" onclick="delHdr(${h.id})">✕</button></div>`).join('');}
+
+// ── API Request ──────────────────────────────────────────────────
+async function sendReq(){
+  const env=document.getElementById('env-sel').value,tok=document.getElementById('tok').value.trim();
+  const method=document.getElementById('meth').value,path=document.getElementById('path-in').value.trim();
+  const rawBody=document.getElementById('body-ed').value.trim();
+  if(!path){alert('Falta el path.');return;}
+  const url=ENVS[env]+path.replace(/^\//,'');
+  const hdrs={'Content-Type':'application/json'};if(tok)hdrs['x-token']=tok;
+  xhdrs.forEach(h=>{if(h.k)hdrs[h.k]=h.v;});
+  let bodyData=null;
+  if(rawBody&&method!=='GET'&&method!=='DELETE'){try{JSON.parse(rawBody);bodyData=rawBody;}catch(e){alert('Body JSON invalido: '+e.message);return;}}
+  const btn=document.getElementById('send-btn');btn.disabled=true;btn.textContent='Enviando...';
+  document.getElementById('res-bar').innerHTML='<span style="color:var(--mu)">Enviando...</span>';
+  document.getElementById('res-body').innerHTML='<div class="res-ph">Esperando...</div>';
+  const t0=performance.now();
+  try{
+    let res;
+    if(serverOk){res=await fetch(SRV+'/api/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,method,headers:hdrs,body:bodyData?JSON.parse(rawBody):null})});}
+    else{res=await fetch(url,{method,headers:hdrs,body:bodyData});}
+    const ms=Math.round(performance.now()-t0),resText=await res.text(),sz=new Blob([resText]).size;
+    let resData=null;try{resData=JSON.parse(resText);}catch{}
+    lastRes={status:res.status,ms,resData,resText,sz};
+    history.unshift({env,method,path,body:rawBody,status:res.status,ms});
+    saveHist();renderHist();
+    const cls=res.status>=500?'s5xx':res.status>=400?'s4xx':res.status>=300?'s3xx':'s2xx';
+    const fmtSz=sz<1024?sz+' B':(sz/1024).toFixed(1)+' KB';
+    document.getElementById('res-bar').innerHTML=`<span class="sbadge ${cls}">${res.status}</span><span class="res-time">${ms}ms</span><span class="res-sz">${fmtSz}</span><button class="res-cp" onclick="cpyRes()">Copiar</button>`;
+    renderRes();
+  }catch(e){
+    const ms=Math.round(performance.now()-t0);
+    history.unshift({env,method,path,body:rawBody,status:'ERR',ms});saveHist();renderHist();
+    document.getElementById('res-bar').innerHTML=`<span class="sbadge s5xx">ERROR</span><span class="res-time">${ms}ms</span>`;
+    document.getElementById('res-body').innerHTML=`<div style="padding:14px;color:var(--re);font-size:13px"><strong>Error:</strong> ${e.message}<br><br>${!serverOk?'<span style="color:var(--mu)">Tip: python3 ~/Documents/cocoa-devtools.py</span>':''}</div>`;
+  }finally{btn.disabled=false;btn.textContent='Enviar ⌘↵';}
+}
+function renderRes(){
+  if(!lastRes)return;
+  const el=document.getElementById('res-body');
+  if(resView==='raw'){el.innerHTML=`<pre style="padding:12px;font-family:'SF Mono',Menlo,monospace;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all">${esc(lastRes.resText)}</pre>`;}
+  else{el.innerHTML=lastRes.resData!==null?`<div class="json-view">${syntaxHL(lastRes.resData)}</div>`:`<pre style="padding:12px;font-family:'SF Mono',Menlo,monospace;font-size:12px;line-height:1.6">${esc(lastRes.resText)}</pre>`;}
+}
+function cpyRes(){if(lastRes)navigator.clipboard.writeText(lastRes.resText);}
+function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function escAttr(s){return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function syntaxHL(json){return esc(JSON.stringify(json,null,2)).replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,m=>{const cls=/^"/.test(m)?(/:$/.test(m)?'jk':'js'):/true|false/.test(m)?'jb':/null/.test(m)?'jnu':'jn';return`<span class="${cls}">${m}</span>`;});}
+
+// ── Copy ─────────────────────────────────────────────────────────
+function cpyCmd(btn){const t=btn.closest('.cb').querySelector('pre').innerText;navigator.clipboard.writeText(t).then(()=>{btn.textContent='✓';btn.classList.add('ok');setTimeout(()=>{btn.textContent='Copiar';btn.classList.remove('ok');},1800);});}
+
+// ── Terminal ─────────────────────────────────────────────────────
+function openTerm(label){document.getElementById('term').classList.add('open');document.getElementById('term-label').textContent=label;document.getElementById('term-out').textContent='';document.getElementById('term-dot').className='term-dot running';document.getElementById('term-st').textContent='Corriendo...';}
+function closeTerm(){cancelCmd();document.getElementById('term').classList.remove('open');}
+function cancelCmd(){if(termCtrl){termCtrl.abort();termCtrl=null;}document.getElementById('term-dot').className='term-dot';document.getElementById('term-st').textContent='Detenido';}
+function appendTerm(text){const clean=text.replace(/\x1b\[[0-9;]*[mGKHFJA-Z]/g,'').replace(/\r\n/g,'\n').replace(/\r/g,'\n');const el=document.getElementById('term-out');el.textContent+=clean;el.scrollTop=el.scrollHeight;}
+async function runCmd(cmdKey,label){
+  if(!serverOk){alert('Servidor no disponible.\npython3 ~/Documents/cocoa-devtools.py');return;}
+  if(!currentCwd){alert('Selecciona un worktree en la barra de arriba primero.');return;}
+  await _execCmd(cmdKey,label,currentCwd);
+}
+async function runCmdIn(cmdKey,label,cwd){
+  if(!serverOk){alert('Servidor no disponible.');return;}
+  await _execCmd(cmdKey,label,cwd);
+}
+async function _execCmd(cmdKey,label,cwd){
+  if(termCtrl)termCtrl.abort();
+  termCtrl=new AbortController();
+  openTerm(`${label}  —  ${cwd.split('/').pop()}`);
+  try{
+    const res=await fetch(SRV+'/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:cmdKey,cwd}),signal:termCtrl.signal});
+    if(!res.ok){appendTerm(`[Error: ${res.status}]\n`);document.getElementById('term-dot').className='term-dot err';document.getElementById('term-st').textContent='Error';return;}
+    const reader=res.body.getReader(),dec=new TextDecoder();
+    while(true){const{done,value}=await reader.read();if(done)break;appendTerm(dec.decode(value,{stream:true}));}
+    const exitOk=document.getElementById('term-out').textContent.includes('[EXIT 0]');
+    document.getElementById('term-dot').className='term-dot '+(exitOk?'ok':'err');
+    document.getElementById('term-st').textContent=exitOk?'Completado ✓':'Fallo ✗';
+    if(exitOk&&cmdKey==='git-push')setTimeout(refreshWorktrees,500);
+  }catch(e){
+    if(e.name!=='AbortError'){appendTerm(`\n[Error: ${e.message}]\n`);document.getElementById('term-dot').className='term-dot err';}
+    else appendTerm('\n[Cancelado]\n');
+  }finally{termCtrl=null;}
+}
+
+// ── Notes ────────────────────────────────────────────────────────
+function saveNote(id){localStorage.setItem('coa-note-'+id,document.getElementById(id).value);const sv=document.getElementById(id+'-sv');sv.style.display='block';clearTimeout(sv._t);sv._t=setTimeout(()=>{sv.style.display='none';},1400);}
+function loadNotes(){['n-backend','n-frontend','n-deploy','n-misc'].forEach(id=>{const v=localStorage.getItem('coa-note-'+id);if(v)document.getElementById(id).value=v;});}
+
+// ── Keyboard ─────────────────────────────────────────────────────
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){if(document.getElementById('panel-api').classList.contains('on'))sendReq();}
+  if(e.key==='Escape')closeTerm();
+});
+
+// ── Init ──────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded',async()=>{
+  loadCfg();loadHist();loadNotes();loadCLState();renderAllCL();
+  await checkServer();
+  await initWtBar();
+  setInterval(checkServer,10000);
+});
+</script>
+</body>
+</html>

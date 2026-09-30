@@ -1,0 +1,13 @@
+"$schema" = "https://conductor.build/schemas/settings.schema.json"
+claude_provider = "default"
+tool_approvals_enabled = false
+
+[git]
+branch_prefix_type = "github_username"
+
+[models]
+default = "sonnet"
+
+[models.codex]
+default_thinking_level = "medium"
+review_thinking_level = "high"

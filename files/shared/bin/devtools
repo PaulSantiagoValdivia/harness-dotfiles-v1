@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SERVER="${COCOA_DEVTOOLS_SERVER:-$HOME/Documents/cocoa-devtools.py}"
+
+if [ ! -f "$SERVER" ]; then
+  printf 'No existe el servidor gestionado: %s\nEjecuta nuevamente el bootstrap del harness.\n' "$SERVER" >&2
+  exit 1
+fi
+
+exec python3 "$SERVER"

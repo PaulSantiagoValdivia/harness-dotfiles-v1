@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+# codex-run — invocación canónica de Codex desde el harness de Claude.
+#
+# Existe por el incidente 2026-08-30: un `codex exec` lanzado desde una sesión
+# Claude quedó COLGADO 13 minutos (0.1s de CPU) sin techo. Dos causas juntas:
+#   1. El shim de cmux va primero en el PATH y envuelve a codex con hooks de
+#      cmux aunque la sesión no corra en un pane de cmux.
+#   2. Nada acotaba la espera: sin timeout, un cuelgue es infinito.
+#
+# Este launcher elimina ambas por construcción:
+#   - binario real, sin shim:   /usr/local/bin/codex
+#   - stdin cerrado:            </dev/null (codex no puede quedarse leyendo)
+#   - hooks de cmux anulados:   -c hooks vacíos
+#   - techo duro:               CODEX_RUN_TIMEOUT segundos (default 600) con
+#                               watchdog propio (macOS no trae `timeout`).
+#     Al expirar: TERM, 5s de gracia, KILL, exit 124 y mensaje claro.
+#
+# Uso: codex-run exec [args de codex...] "<prompt>"
+#      CODEX_RUN_TIMEOUT=900 codex-run exec ... (para tareas largas)
+#
+# SIN CRÉDITOS (regla del usuario 2026-09-03) -------------------------------
+# Cuando Codex se queda sin cuota, el escritor de código pasa a ser Claude.
+# Este launcher lo detecta en la salida de codex y deja el interruptor puesto:
+#   ~/.claude/codex-sin-creditos
+# route-code-to-codex.sh lee ese archivo en cada tool call y deja de bloquear
+# Edit/Write/Bash sobre código mientras esté fresco (TTL por default 12h, ver
+# CODEX_SIN_CREDITOS_TTL_H). Es un archivo y no una variable de entorno
+# justamente porque las sesiones YA ABIERTAS no pueden cambiar su entorno:
+# el fallback tiene que servir en la sesión donde se descubre la falta de cuota.
+# Se cierra solo al caducar, o a mano con: rm ~/.claude/codex-sin-creditos
+
+set -uo pipefail
+
+CODEX_BIN="${CODEX_RUN_BIN:-/usr/local/bin/codex}"  # override solo para tests
+
+# Watchdog por INACTIVIDAD, no por reloj (2026-09-07) -----------------------
+# El techo de reloj medía la variable equivocada. Auditoría sobre 492 sesiones:
+# mediana 171s, p75 388s, p90 644s, máximo 2247s (37 min, 453 eventos: un agente
+# TRABAJANDO). El techo de 900s mataba el 5% de las corridas, y ese 5% es donde
+# vive el trabajo grande — no donde viven los cuelgues. Los 8 timeouts del
+# 2026-09-07 landearon el trabajo los 8 (6, 8, 2 y 14 archivos): se mató a
+# Codex mientras escribía su reporte.
+#
+# El cuelgue original (2026-08-30) era 13 minutos con 0,1s de CPU. Esa es la
+# firma real: CPU plana y salida muda. Una corrida sana quema CPU de forma
+# sostenida (smoke medido: 12,1s user + 6,3s sys en 45s de pared).
+#
+# Por eso ahora se mata por FALTA DE PROGRESO, con dos señales en OR:
+#   - CPU acumulada del árbol (hijo + descendientes) que no avanza, y
+#   - archivo de stderr que no crece.
+# El OR importa: un Codex esperando latencia larga del modelo consume poca CPU
+# pero suele seguir emitiendo; y si no emite nada, el umbral holgado lo cubre.
+#
+#   CODEX_RUN_IDLE  segundos sin progreso antes de declarar cuelgue (default 180)
+#   CODEX_RUN_MAX   techo absoluto de respaldo (default 2700, sobre el máx observado)
+#   CODEX_RUN_TIMEOUT  compat: si el llamador lo fija, manda como techo absoluto.
+IDLE_LIMIT="${CODEX_RUN_IDLE:-180}"
+if [ -n "${CODEX_RUN_TIMEOUT:-}" ]; then
+  MAX_LIMIT="$CODEX_RUN_TIMEOUT"   # llamadas viejas siguen valiendo tal cual
+else
+  MAX_LIMIT="${CODEX_RUN_MAX:-2700}"
+fi
+TIMEOUT="$MAX_LIMIT"   # el resto del script y sus mensajes siguen leyendo TIMEOUT
+
+[ -x "$CODEX_BIN" ] || { echo "codex-run: no existe $CODEX_BIN" >&2; exit 127; }
+
+# stdin: cerrado por default (un stdin abierto sin datos fue la mitad del
+# cuelgue original). Si el llamador necesita alimentar datos (ej: dual-review
+# le pasa un diff), los escribe a un archivo y lo nombra en CODEX_RUN_STDIN —
+# un archivo siempre entrega EOF, no puede colgar.
+STDIN_SRC="${CODEX_RUN_STDIN:-/dev/null}"
+[ -r "$STDIN_SRC" ] || { echo "codex-run: CODEX_RUN_STDIN no legible: $STDIN_SRC" >&2; exit 66; }
+
+# Veredicto de trabajo landeado (2026-08-31) -------------------------------
+# Auditoría de consumo: 84 de 290 invocaciones fallaron, 72 por TIMEOUT. El
+# patrón dominante NO era "Codex no hizo nada": era Codex TERMINANDO el trabajo
+# y muriendo mientras generaba su reporte. Claude leía exit 124, lo trataba como
+# fracaso y RE-DESPACHABA la misma tarea — pagando dos veces instrucción +
+# auditoría de diff a 400k de contexto por request. El aviso en prosa ("antes de
+# re-despachar, mirá git diff") no alcanzaba: nadie lo obedecía.
+#
+# Ahora se mide. Se toma huella del repo antes de lanzar y se compara al salir:
+# si el árbol cambió, el veredicto lo dice explícitamente y prohíbe re-despachar.
+REPO="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+repo_fingerprint() {
+  [ -n "$REPO" ] || return 0
+  {
+    git -C "$REPO" rev-parse HEAD 2>/dev/null
+    git -C "$REPO" status --porcelain 2>/dev/null
+  } | shasum 2>/dev/null | cut -d' ' -f1
+}
+BEFORE_FP="$(repo_fingerprint)"
+
+verdict() {
+  local rc="$1"
+  [ -n "$REPO" ] || return 0
+  local after_fp; after_fp="$(repo_fingerprint)"
+  if [ "$after_fp" != "$BEFORE_FP" ]; then
+    local files; files="$(git -C "$REPO" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+    cat >&2 <<MSG
+
+codex-run: VEREDICTO — EL TRABAJO SÍ LANDEÓ (exit $rc, $files archivo(s) tocados en $REPO).
+El proceso murió, el cambio NO. NO RE-DESPACHES la misma instrucción: duplicarías
+el trabajo y el gasto. Auditá lo que hay y seguí desde ahí:
+  git -C $REPO status --short
+  git -C $REPO diff
+Solo re-despachá si el diff está INCOMPLETO, y entonces pedí únicamente lo que falta.
+MSG
+  else
+    cat >&2 <<MSG
+
+codex-run: VEREDICTO — el repo quedó IDÉNTICO (exit $rc). Codex no escribió nada.
+Re-despachar es válido, pero NO repitas la instrucción igual: si expiró por tamaño,
+partila en pasos más chicos, o subí el techo con CODEX_RUN_TIMEOUT.
+MSG
+  fi
+}
+
+# Detección de cuota agotada: se espeja stderr a un archivo para poder
+# inspeccionarlo al final SIN dejar de mostrarlo en vivo.
+ERRLOG="$(mktemp -t codex-run-err)"
+trap 'rm -f "$ERRLOG"' EXIT
+
+SIN_CREDITOS_FLAG="${CODEX_SIN_CREDITOS_FLAG:-$HOME/.claude/codex-sin-creditos}"
+# Patrones de cuota agotada. Se scanean con -i. Si Codex cambia el texto, esto
+# deja de disparar: por eso el flag TAMBIÉN se puede crear a mano con `touch`.
+SIN_CREDITOS_RE='usage limit|quota|out of credits|insufficient_quota|credit balance|rate.?limit|429|billing'
+# Sesión caída NO es lo mismo que cuota agotada, y confundirlas cuesta caro: sin
+# esta rama, un Codex deslogueado escupe una tormenta de 401 y el diagnóstico
+# natural es "se acabaron los créditos". Se avisa con el comando exacto y NO se
+# levanta el interruptor: un problema de auth no debe abrirle el paso a Claude
+# para escribir todo el código del repo.
+SIN_AUTH_RE='401 Unauthorized|missing bearer|not logged in|unauthorized.*api key|invalid_api_key'
+
+"$CODEX_BIN" "$@" \
+  -c 'hooks.SessionStart=[]' -c 'hooks.Stop=[]' \
+  -c 'hooks.PreToolUse=[]' -c 'hooks.PostToolUse=[]' \
+  <"$STDIN_SRC" 2> >(tee "$ERRLOG" >&2) &
+child=$!
+
+# Descendientes por BFS: matar sólo al padre deja nietos huérfanos, y medir
+# sólo al padre subestima la CPU (el trabajo real lo hacen los hijos).
+descendants() {
+  local out="$1" frontier="$1" next="" p kids depth=0
+  while [ -n "$frontier" ] && [ "$depth" -lt 12 ]; do
+    next=""
+    for p in $frontier; do
+      kids="$(pgrep -P "$p" 2>/dev/null | tr '\n' ' ')"
+      [ -n "$kids" ] && { out="$out $kids"; next="$next $kids"; }
+    done
+    frontier="$next"; depth=$((depth+1))
+  done
+  echo "$out"
+}
+
+# CPU acumulada del árbol, en segundos enteros. `ps -o time=` da [DD-]HH:MM:SS
+# o MM:SS.ss según el caso; se acumula en base 60 desde la derecha, así que
+# ambos formatos caen bien sin ramas especiales.
+cpu_tree() {
+  local pids; pids="$(descendants "$1" | tr ' ' ',' | sed 's/,,*/,/g; s/^,//; s/,$//')"
+  [ -n "$pids" ] || { echo 0; return; }
+  ps -o time= -p "$pids" 2>/dev/null | awk '
+    { gsub(/-/, ":"); n=split($1, a, ":"); s=0; m=1
+      for (i=n; i>=1; i--) { s += a[i]*m; m*=60 }
+      t += s }
+    END { printf "%d", t+0 }'
+}
+
+out_size() { [ -f "$ERRLOG" ] && wc -c <"$ERRLOG" 2>/dev/null | tr -d ' ' || echo 0; }
+
+kill_tree() {
+  local why="$1" kids
+  echo "codex-run: $why — terminando codex (pid $child) y sus descendientes. ANTES de re-despachar: git diff/status — el trabajo puede estar COMPLETO aunque el proceso muriera generando su reporte (patrón visto 4 veces el 2026-08-31, y los 8 timeouts del 2026-09-07 landearon los 8)." >&2
+  kids="$(descendants "$child")"
+  # shellcheck disable=SC2086
+  kill $kids 2>/dev/null
+  sleep 5
+  # shellcheck disable=SC2086
+  kill -9 $kids 2>/dev/null
+}
+
+(
+  # Muestreo cada 15s: fino para detectar un cuelgue en ~3 min, y barato
+  # (un ps por muestra) para no competir por CPU con lo que está midiendo.
+  step=15; elapsed=0; idle=0
+  last_cpu="$(cpu_tree "$child")"; last_out="$(out_size)"
+  while kill -0 "$child" 2>/dev/null; do
+    sleep "$step"
+    kill -0 "$child" 2>/dev/null || break
+    elapsed=$((elapsed+step))
+    cpu="$(cpu_tree "$child")"; osz="$(out_size)"
+    if [ "$cpu" -gt "$last_cpu" ] 2>/dev/null || [ "$osz" -gt "$last_out" ] 2>/dev/null; then
+      idle=0                      # hubo progreso: se reinicia la cuenta
+    else
+      idle=$((idle+step))
+    fi
+    last_cpu="$cpu"; last_out="$osz"
+
+    if [ "$elapsed" -ge "$MAX_LIMIT" ]; then
+      kill_tree "TIMEOUT tras ${elapsed}s (techo absoluto ${MAX_LIMIT}s)"
+      break
+    fi
+    if [ "$idle" -ge "$IDLE_LIMIT" ]; then
+      kill_tree "COLGADO: ${IDLE_LIMIT}s sin CPU nueva ni salida nueva (${elapsed}s de pared)"
+      break
+    fi
+  done
+) &
+watchdog=$!
+
+wait "$child"; rc=$?
+kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+
+if [ "$rc" -ge 124 ] && ! kill -0 "$child" 2>/dev/null && [ "$rc" != 0 ]; then
+  # 143 = TERM del watchdog; normalizamos a 124 estilo timeout(1)
+  case "$rc" in 143|137) echo "codex-run: abortado por timeout (exit $rc → 124)" >&2; verdict 124; exit 124;; esac
+fi
+
+# Cualquier salida no-cero merece veredicto: el timeout es el caso frecuente,
+# pero un crash a mitad de escritura deja el mismo estado ambiguo.
+[ "$rc" != 0 ] && verdict "$rc"
+
+# Cuota agotada → se levanta el interruptor y Claude pasa a escribir el código.
+if [ "$rc" != 0 ] && grep -qiE "$SIN_CREDITOS_RE" "$ERRLOG" 2>/dev/null; then
+  mkdir -p "$(dirname "$SIN_CREDITOS_FLAG")"
+  {
+    echo "Codex sin cuota detectado por codex-run el $(date '+%Y-%m-%d %H:%M:%S') (exit $rc)."
+    echo "Mientras este archivo exista y sea reciente, route-code-to-codex.sh NO bloquea:"
+    echo "Claude escribe el código directo. Borralo cuando la cuota vuelva:"
+    echo "  rm $SIN_CREDITOS_FLAG"
+    echo "--- stderr de codex (últimas líneas) ---"
+    tail -5 "$ERRLOG"
+  } > "$SIN_CREDITOS_FLAG"
+  cat >&2 <<MSG
+
+codex-run: CODEX SIN CUOTA. Interruptor puesto en $SIN_CREDITOS_FLAG.
+Regla del usuario: cuando no hay créditos de Codex, CLAUDE escribe el código.
+Escribí el cambio vos mismo (Edit/Write ya no están bloqueados) y auditalo igual
+que auditarías un diff de Codex. Cuando la cuota vuelva: rm $SIN_CREDITOS_FLAG
+MSG
+elif [ "$rc" != 0 ] && grep -qiE "$SIN_AUTH_RE" "$ERRLOG" 2>/dev/null; then
+  cat >&2 <<MSG
+
+codex-run: CODEX NO AUTENTICADO (401). Esto NO es falta de cuota, así que el
+interruptor $SIN_CREDITOS_FLAG NO se levanta.
+El login es interactivo y solo lo puede hacer el usuario. Pedile que corra:
+  codex login
+Verificalo después con: codex login status
+MSG
+fi
+
+exit "$rc"

@@ -1,0 +1,75 @@
+schema: spec-driven
+project: harness-dotfiles
+artifact_store: openspec
+strict_tdd: true
+
+context: |
+  Tech stack: Bash bootstrap and acceptance scripts, JSON/TOML configuration, and ESM workflow definitions.
+  Architecture: idempotent installer plus versioned Claude Code, Codex, Gentle AI, Engram, and Conductor overlays.
+  Testing: ./verify.sh exercises the installed harness; bash -n and node --check provide source-level syntax checks.
+  Style: preserve user-owned settings, back up overwritten files, keep Claude/Codex capability parity, and avoid duplicate providers.
+
+testing:
+  detected: "2026-07-30"
+  strict_tdd: true
+  runner:
+    framework: Bash acceptance harness
+    command: ./verify.sh
+  layers:
+    unit:
+      available: false
+      tool: null
+    integration:
+      available: true
+      tool: verify.sh live CLI and installed-state checks
+    e2e:
+      available: true
+      tool: verify.sh acceptance checklist
+  coverage:
+    available: false
+    command: null
+  quality:
+    linter:
+      available: false
+      command: null
+      note: shellcheck is referenced by project guidance but is not installed or automated in this repository
+    type_checker:
+      available: false
+      command: null
+    formatter:
+      available: false
+      command: null
+    syntax_checks:
+      available: true
+      commands:
+        - bash -n bootstrap.sh verify.sh files/claude/statusline.sh
+        - node --check files/claude/workflows/codex-build.js
+        - node --check files/claude/workflows/dual-review.js
+
+rules:
+  proposal:
+    - Identify which installed user configuration may be overwritten and include a rollback plan.
+    - Preserve Claude Code and Codex capability parity unless a client-specific limitation is documented.
+  specs:
+    - Use RFC 2119 keywords for normative requirements.
+    - Write acceptance scenarios in Given/When/Then form.
+    - Cover fresh installation, idempotent reruns, and preservation of existing user preferences.
+  design:
+    - Document configuration ownership, backup behavior, and client-specific adaptation points.
+    - Prefer one shared source for behavior that must remain identical across Claude Code and Codex.
+  tasks:
+    - Group work into reviewable phases with hierarchical numbering.
+    - Keep installer changes and their verification checks in the same work unit.
+  apply:
+    guidelines:
+      - Follow existing Bash and overlay patterns; do not edit generated user-home state as project source.
+      - Do not activate a second Engram provider or duplicate memory hooks.
+      - Preserve unrelated working-tree changes.
+    tdd: true
+    test_command: ./verify.sh
+  verify:
+    test_command: ./verify.sh
+    build_command: bash -n bootstrap.sh verify.sh files/claude/statusline.sh
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive or compatibility-breaking deltas.

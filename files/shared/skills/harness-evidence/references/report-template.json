@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "timestamp_utc": null,
+  "repository": {
+    "path": null,
+    "branch": null,
+    "commit": null,
+    "dirty": null,
+    "snapshot_limitations": "Not observed; dirty HEAD alone cannot identify tested bytes."
+  },
+  "scope": "Describe the bounded claim.",
+  "target": "Identify the actual checkout, installed runtime, or deployment.",
+  "environment": "Record relevant runtime and prerequisites.",
+  "checks": [
+    {
+      "expected": "Describe the assertion before execution.",
+      "observed": "Not executed.",
+      "command_or_interaction": null,
+      "exit_code": null,
+      "exit_code_reason": "Not executed; explain non-command interactions explicitly.",
+      "status": "UNTESTED"
+    }
+  ],
+  "before": {"reference": null, "unavailable_reason": "Not captured."},
+  "after": {"reference": null, "unavailable_reason": "Not captured."},
+  "artifacts": [
+    {"path": null, "sha256": null, "unavailable_reason": "No retained artifact."}
+  ],
+  "limitations": ["Template only; no correctness claim."],
+  "sensitive_data": "Keep local. Redact secrets; obtain explicit approval before capture or publication."
+}

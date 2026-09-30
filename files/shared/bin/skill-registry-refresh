@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# SessionStart producer: one worktree root, never nested cwd or Git common root.
+set -uo pipefail
+skip() { printf 'SKIPPED registry: %s\n' "$1" >&2; exit 0; }
+physical=$(cd "${1:-$PWD}" 2>/dev/null && pwd -P) || skip 'cwd unavailable'
+home=$(cd "$HOME" 2>/dev/null && pwd -P) || skip 'HOME unavailable'
+if [ "$physical" = "$home" ]; then
+  target="$home"
+else
+  inside=$(git -C "$physical" rev-parse --is-inside-work-tree 2>/dev/null) || skip 'Git unavailable/nonrepository'
+  [ "$inside" = true ] || skip 'not a working tree'
+  target=$(git -C "$physical" rev-parse --show-toplevel 2>/dev/null) || skip 'root unresolved'
+  target=$(cd "$target" 2>/dev/null && pwd -P) || skip 'root unavailable'
+fi
+if ! gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$target"; then
+  printf 'BLOCKED registry: refresh failed at %s\n' "$target" >&2
+fi
+# A failed refresh remains visible without aborting session startup.
+exit 0

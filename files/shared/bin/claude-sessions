@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# claude-sessions — qué sesiones de Claude están vivas, DÓNDE viven realmente y
+# cuánto contexto paga cada turno suyo.
+#
+# Existe por la auditoría del 2026-08-31: el usuario creía tener 2 sesiones
+# activas y tenía 7. `ps` muestra procesos, no contexto, y el costo es
+# tamaño_de_contexto x cantidad_de_requests — o sea que lo que no se ve es
+# justamente lo que se paga.
+#
+# REESCRITO el 2026-09-03. La versión anterior tenía tres defectos, los tres de
+# la misma familia: imprimía como MEDICIÓN algo que nunca midió.
+#
+#   1. "suelta en ~" salía cuando el nombre del transcript no contenía
+#      `triangulate-<slug>`. Eso sólo dice "no es una triangulación"; no dice
+#      nada del cwd. Dos sesiones reportadas como sueltas vivían en el checkout
+#      del backend. Ahora el cwd se MIDE con lsof.
+#
+#   2. "VIEJA" se derivaba de `etime`, la edad del PROCESO, que `/clear` no
+#      reinicia. Falso positivo por construcción: el 2026-09-03 el PID 28975
+#      llevaba 28h de proceso y estaba entregando trabajo en ese momento.
+#      Ahora la inactividad se MIDE por mtime del transcript.
+#
+#   3. Ordenaba por antigüedad de proceso y avisaba por horas abiertas. Es al
+#      revés: UNA SESIÓN VIEJA E INACTIVA NO PAGA NADA. El costo son los TURNOS.
+#      Ahora ordena por contexto descendente, que es lo que se factura.
+#
+# Umbrales alineados con ~/.claude/hooks/context-budget.sh (recalibrado el
+# 2026-09-01 a 200k/300k/400k). Si movés uno, movés los dos.
+#
+# LÍMITE CONOCIDO, dicho a propósito en la salida y no maquillado: el
+# `--session-id` del command line NO es el transcript que la sesión escribe
+# (tras `/clear` arranca otro archivo y el proceso conserva el id viejo), y
+# `lsof` no lo expone porque Claude Code escribe en append sin dejarlo abierto.
+# Lo medible es el transcript más reciente del DIRECTORIO de proyecto que
+# corresponde al cwd. Cuando dos procesos comparten cwd, ctx e inactividad son
+# del directorio, no del PID: esas filas se marcan con `*`.
+#
+# Uso:  claude-sessions          # tabla
+#       claude-sessions --watch  # refresca cada 10s (Ctrl-C para salir)
+#       claude-sessions --porcelain  # tab-separated, para scripts
+
+set -uo pipefail
+
+PROJ="$HOME/.claude/projects"
+
+CTX_AVISO="${CLAUDE_SESSIONS_CTX_AVISO:-200000}"
+CTX_ALTO="${CLAUDE_SESSIONS_CTX_ALTO:-300000}"
+CTX_CRITICO="${CLAUDE_SESSIONS_CTX_CRITICO:-400000}"
+INACT_MIN="${CLAUDE_SESSIONS_INACT_MIN:-120}"
+
+have_jq=1;   command -v jq   >/dev/null || have_jq=0
+have_lsof=1; command -v lsof >/dev/null || have_lsof=0
+
+# Duración legible a partir de minutos enteros.
+fmt_age() {
+  local m="$1"
+  if   [ "$m" -lt 60 ]   ; then printf '%dm' "$m"
+  elif [ "$m" -lt 1440 ] ; then printf '%dh%02dm' $((m/60)) $((m%60))
+  else                          printf '%dd%02dh' $((m/1440)) $(((m%1440)/60))
+  fi
+}
+
+# cwd real del proceso. Sin fallback inventado: si no se puede medir, se dice.
+cwd_of() {
+  local pid="$1" out
+  [ "$have_lsof" = 1 ] || { printf ''; return 1; }
+  out="$(lsof -a -p "$pid" -d cwd -Fn 2>&1 | sed -n 's/^n//p' | head -1)"
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
+# ~/.claude/projects codifica el cwd reemplazando por `-` TODO lo que no sea
+# alfanumérico. No sólo `/` y `.`: también `_` (`cocoa_v2` → `cocoa-v2`).
+# Verificado el 2026-09-03 contra los 60+ directorios existentes: ninguno tiene
+# un carácter fuera de [A-Za-z0-9-]. Con el mapeo incompleto, el cwd de una
+# sesión de cocoa_v2 apuntaba a un directorio inexistente y la fila salía
+# entera como "?" — silencio leído como ausencia, otra vez.
+proj_dir_of() { printf '%s' "$1" | sed 's/[^A-Za-z0-9]/-/g'; }
+
+# Etiqueta corta e inequívoca del cwd: repo, y el worktree si lo hay.
+label_of() {
+  local cwd="$1" repo wt
+  case "$cwd" in
+    */.claude/worktrees/*)
+      repo="${cwd%%/.claude/worktrees/*}"; repo="${repo##*/}"
+      wt="${cwd##*/.claude/worktrees/}"
+      printf '%s [%s]' "$repo" "${wt#triangulate-}" ;;
+    *) printf '%s' "${cwd##*/}" ;;
+  esac
+}
+
+# Contexto del último request registrado en el transcript. Devuelve el número, o
+# la cadena vacía si NO se pudo medir — nunca 0, que sería una afirmación falsa.
+ctx_of() {
+  local f="$1" v
+  [ "$have_jq" = 1 ] || return 1
+  v="$(tail -n 400 "$f" | jq -rs '
+        [ .[] | select(type=="object") | .message.usage // empty
+          | (.input_tokens//0)+(.cache_read_input_tokens//0)+(.cache_creation_input_tokens//0)
+        ] | last // empty')" || return 1
+  case "$v" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$v"
+}
+
+# Pasada de medición. La comparten la tabla y --porcelain a propósito: el
+# vigilante NO puede reimplementar esta lógica o volvemos a tener dos verdades
+# sobre las mismas sesiones, que es el problema que este archivo vino a cerrar.
+#
+# Formato intermedio: <ctx_orden> <pid> <ctx|-> <inact_min|-> <projdir|-> <label>
+collect() {
+  local tmp="$1" now processes
+  # Match executable identity, not optional flags or arbitrary argument text.
+  # A failed ps must not become a successful empty inventory.
+  processes="$(ps -eo pid=,comm=)" || return 1
+  now="$(date +%s)"
+
+  while read -r pid; do
+    [ -n "${pid:-}" ] || continue
+
+    local cwd="" pdir="" label="?" newest="" ctx="" inact=""
+    if cwd="$(cwd_of "$pid")"; then
+      label="$(label_of "$cwd")"
+      pdir="$PROJ/$(proj_dir_of "$cwd")"
+      if [ -d "$pdir" ]; then
+        # Se lista el directorio y se filtra por extensión, en vez de expandir
+        # un glob: un glob sin match escupe a stderr (o falla, según el shell) y
+        # la única forma de callarlo sería un 2>/dev/null, que es justo lo que
+        # convierte un error en un "no hay nada" falso.
+        newest="$(command ls -1t "$pdir" | grep -E '\.jsonl$' | head -1)"
+        [ -n "$newest" ] && newest="$pdir/$newest"
+        if [ -f "${newest:-}" ]; then
+          inact=$(( (now - $(stat -f %m "$newest")) / 60 ))
+          ctx="$(ctx_of "$newest")" || ctx=""
+        fi
+      else
+        pdir=""
+      fi
+    else
+      label="(cwd no medible)"
+    fi
+
+    printf '%s %s %s %s %s %s\n' \
+      "${ctx:-0}" "$pid" "${ctx:--}" "${inact:--}" "${pdir:--}" "$label" >>"$tmp"
+  done < <(printf '%s\n' "$processes" | awk '
+    { pid=$1; sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "");
+      if ($0 == "claude" || $0 ~ /\/claude$/) print pid }')
+}
+
+# Estado de una fila a partir del contexto. Devuelve ok|AVISO|ALTO|QUEMANDO|?
+state_of() {
+  local ctx="$1"
+  [ "$ctx" = "-" ] && { printf '?'; return; }
+  if   [ "$ctx" -ge "$CTX_CRITICO" ]; then printf 'QUEMANDO'
+  elif [ "$ctx" -ge "$CTX_ALTO" ]   ; then printf 'ALTO'
+  elif [ "$ctx" -ge "$CTX_AVISO" ]  ; then printf 'AVISO'
+  else                                     printf 'ok'
+  fi
+}
+
+# ¿Está pesada Y quieta? Es la única condición que ninguna otra barrera puede
+# ver: context-budget.sh corre en UserPromptSubmit, o sea sólo cuando el
+# usuario escribe, y una sesión abandonada no escribe nunca más.
+is_forgotten() {
+  local ctx="$1" inact="$2"
+  [ "$ctx" != "-" ] && [ "$inact" != "-" ] \
+    && [ "$ctx" -ge "$CTX_AVISO" ] && [ "$inact" -ge "$INACT_MIN" ]
+}
+
+# Salida estable para consumo por script (el vigilante launchd). Tab-separated,
+# sin encabezado, sin colores, ordenada por contexto descendente:
+#   pid \t ctx \t inact_min \t estado \t olvidada(0|1) \t compartido(0|1) \t label
+# ctx e inact_min pueden ser "-" cuando no se pudieron medir. NUNCA 0: un cero
+# ahí sería una afirmación falsa, y el vigilante decidiría sobre ella.
+porcelain() {
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/claude-sessions.XXXXXX")" || { echo "no se pudo crear el temporal" >&2; return 1; }
+  collect "$tmp" || { rm -f "$tmp"; return 1; }
+  while read -r _ord pid ctx inact pdir label; do
+    local forgotten=0 shared=0
+    is_forgotten "$ctx" "$inact" && forgotten=1
+    [ "$pdir" != "-" ] && [ "$(cut -d' ' -f5 "$tmp" | grep -cFx "$pdir")" -gt 1 ] && shared=1
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$pid" "$ctx" "$inact" "$(state_of "$ctx")" "$forgotten" "$shared" "$label"
+  done < <(sort -rn -k1,1 "$tmp")
+  rm -f "$tmp"
+}
+
+render() {
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/claude-sessions.XXXXXX")" || { echo "no se pudo crear el temporal" >&2; return 1; }
+  collect "$tmp" || { rm -f "$tmp"; return 1; }
+
+  printf '%-7s %-8s %-9s %-9s %s\n' PID CTX ESTADO INACTIVA DÓNDE
+  printf '%s\n' "---------------------------------------------------------------------------"
+
+  local total=0 heavy=0 forgotten=0 shared=0
+  while read -r _ord pid ctx inact pdir label; do
+    total=$((total+1))
+
+    local state ctx_col inact_col mark=""
+    state="$(state_of "$ctx")"
+    if [ "$ctx" = "-" ]; then
+      ctx_col="?"
+    else
+      ctx_col="$((ctx/1000))k"
+      [ "$ctx" -ge "$CTX_AVISO" ] && heavy=$((heavy+1))
+    fi
+
+    if [ "$inact" = "-" ]; then
+      inact_col="?"
+    else
+      inact_col="$(fmt_age "$inact")"
+    fi
+
+    # Olvidada = pesada Y quieta. La inactividad sola no es alarma: mientras no
+    # manda turnos no paga. Pesada + quieta sí, porque en cuanto la retomes
+    # pagás ese contexto entero en cada turno.
+    if is_forgotten "$ctx" "$inact"; then
+      state="$state/olvidada?"; forgotten=$((forgotten+1))
+    fi
+
+    # Marca de ambigüedad: otro proceso comparte el mismo directorio, así que
+    # ctx e inactividad son del directorio y no de este PID en particular.
+    if [ "$pdir" != "-" ] && [ "$(cut -d' ' -f5 "$tmp" | grep -cFx "$pdir")" -gt 1 ]; then
+      mark="*"; shared=$((shared+1))
+    fi
+
+    printf '%-7s %-8s %-9s %-9s %s%s\n' "$pid" "$ctx_col" "$state" "$inact_col" "$label" "$mark"
+  done < <(sort -rn -k1,1 "$tmp")
+
+  rm -f "$tmp"
+
+  printf '%s\n' "---------------------------------------------------------------------------"
+  printf 'procesos Claude: %d   pesadas (>=%dk): %d   pesadas y quietas: %d\n' \
+    "$total" "$((CTX_AVISO/1000))" "$heavy" "$forgotten"
+
+  [ "$shared" -gt 0 ] && cat <<'MSG'
+
+* ctx e inactividad de esa fila son del DIRECTORIO, no de ese PID: hay más de
+  una sesión con el mismo cwd y el transcript no se puede atribuir a una sola.
+MSG
+
+  if [ "$heavy" -ge 2 ] || [ "$forgotten" -ge 1 ]; then
+    cat <<'MSG'
+
+AVISO: el costo son los TURNOS, no las horas abiertas. Una sesión vieja y
+quieta no paga nada; una PESADA sí paga su contexto entero en cada turno, y
+el contexto registrado no demuestra costo ni actividad del turno actual.
+Para la misma tarea: checkpoint y compactación nativa conservando autorizaciones
+y procesos. No ejecutar /clear ni cerrar escritores automáticamente.
+Este inventario de procesos NO prueba disponibilidad de inbox ni comunicación.
+MSG
+  fi
+
+  [ "$have_lsof" = 1 ] || echo "AVISO: falta lsof; la columna DÓNDE no se pudo medir." >&2
+  [ "$have_jq" = 1 ]   || echo "AVISO: falta jq; la columna CTX no se pudo medir." >&2
+}
+
+if [ "${1:-}" = "--porcelain" ]; then
+  porcelain
+elif [ "${1:-}" = "--watch" ]; then
+  # Techo duro: 360 vueltas x 10s = 1h. Nunca un loop sin fin (regla del harness).
+  i=0
+  while [ "$i" -lt 360 ]; do
+    clear; date '+%H:%M:%S'; echo; render || exit 1
+    sleep 10; i=$((i+1))
+  done
+else
+  render
+fi

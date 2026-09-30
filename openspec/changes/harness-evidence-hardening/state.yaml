@@ -1,0 +1,13 @@
+change: harness-evidence-hardening
+artifact_store: openspec
+mode: auto
+delivery_strategy: auto-chain
+chain_strategy: feature-branch-chain
+phase: verify
+completed: [explore, proposal, specs, design, tasks]
+apply_state: all_done
+review_lane: native-review
+closure: blocked-persisted-verification-remediation
+upstream_sha: 513f8a24aae6383b00356fa285144b1bc3730dc1
+issue: 3
+tracker_pr: 4
